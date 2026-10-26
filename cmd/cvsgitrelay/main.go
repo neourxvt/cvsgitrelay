@@ -70,33 +70,11 @@ func newRootCommand(setExit func(int)) *cobra.Command {
 	}
 	addOperationFlags(root, "sync", options)
 	root.AddCommand(
-		newCoverageCommand(setExit),
 		newOperationCommand("status", "Show discovered, imported, and pending CVS revisions.", setExit),
 		newOperationCommand("verify", "Check the mirror against CVS and Git integrity rules.", setExit),
 		newOperationCommand("mirror", "Create or incrementally update a deterministic local CVSROOT.", setExit),
 	)
 	return root
-}
-
-// The preferred upgrade builds a new destination. Coverage comparison reads v1
-// provenance solely to verify that transition, without migrating existing refs.
-func newCoverageCommand(setExit func(int)) *cobra.Command {
-	return &cobra.Command{Use: "coverage OLD.git NEW.git", Short: "Compare v1 revision coverage and live bytes with a new v2 destination.", Args: cobra.ExactArgs(2), Run: func(cmd *cobra.Command, args []string) {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		log := slog.New(diag.NewTextHandler(os.Stderr, nil))
-		runner := &process.Runner{Log: log, Timeout: 5 * time.Minute, MaxOutput: 256 << 20}
-		summary, err := relay.CompareCoverage(ctx, runner, args[0], args[1])
-		if encodeErr := json.NewEncoder(os.Stdout).Encode(summary); encodeErr != nil && err == nil {
-			err = diag.New("io", "coverage.output", "write coverage summary", encodeErr)
-		}
-		if err != nil {
-			diag.Failure(log, err, false)
-			setExit(exitCode(diag.Code(err)))
-			return
-		}
-		setExit(0)
-	}}
 }
 
 func newOperationCommand(operation, short string, setExit func(int)) *cobra.Command {

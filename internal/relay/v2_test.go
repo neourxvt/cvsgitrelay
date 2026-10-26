@@ -491,7 +491,7 @@ func TestV2PublicationRecoveryAndDivergence(t *testing.T) {
 	})
 }
 
-func TestV2RejectV1AndPolicyDrift(t *testing.T) {
+func TestV2RejectPolicyDrift(t *testing.T) {
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")
@@ -509,15 +509,6 @@ func TestV2RejectV1AndPolicyDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(diag.Details(err, false))
 	}
-	if err := os.WriteFile(configPath, []byte(`{"format_version":1}`), 0600); err != nil {
-		t.Fatal(diag.Details(err, false))
-	}
-	if other, err := Open(ctx, testRunner(), path); diag.Code(err) != "unsupported" {
-		if other != nil {
-			other.Close()
-		}
-		t.Fatalf("v1 not rejected: %v", err)
-	}
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(diag.Details(err, false))
@@ -531,7 +522,7 @@ func TestV2RejectV1AndPolicyDrift(t *testing.T) {
 		other.Close()
 		t.Fatal("policy drift accepted")
 	}
-	// Version/policy errors must not migrate any refs, even in an empty source.
+	// Reject policy changes before publication can modify any refs.
 	cmd := exec.Command("git", "--git-dir="+path, "show-ref")
 	out, err := cmd.Output()
 	if err != nil {

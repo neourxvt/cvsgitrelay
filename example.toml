@@ -2,7 +2,6 @@
 #   ./cycle.sh example.toml
 #   ./cycle.sh status example.toml
 #   ./cycle.sh verify example.toml
-#   ./cycle.sh coverage ./git-rxvt-unicode ./git-rxvt-unicode-v2
 # Optional independent CVS-to-CVS mirror:
 #   ./cycle.sh mirror example.toml --output ./cvsroot-rxvt-unicode
 # Mirror incrementally copies all revision lines and included modules; it does not
@@ -46,8 +45,8 @@ require_consecutive_revisions = false
 
 [destination]
 # Required dedicated bare Git destination. Sync initializes it automatically.
-# Use a fresh directory; existing v1 mirrors and nonempty unmanaged repositories
-# are rejected. CLI override: --repo
+# Use a fresh directory; nonempty unmanaged repositories are rejected.
+# CLI override: --repo
 repo = "./git-rxvt-unicode-v2"
 
 [sync]

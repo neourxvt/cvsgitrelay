@@ -3,8 +3,7 @@
 This is the implemented SHA-1 reference format. Its executable contract is
 `internal/canonical`, with complete object payloads and OIDs in
 `internal/canonical/testdata/objects-v2.golden`. A format change requires a new
-format ID unless all serialized reachable bytes remain compatible. No existing
-v1 mirror is upgraded by installing or running this implementation.
+format ID unless all serialized reachable bytes remain compatible.
 
 ## Source profile and supported limits
 
@@ -260,7 +259,7 @@ event, tag snapshot, line tip and their trees/blobs must survive with the state
 ref alone. Object storage verifies complete raw payloads against both the encoder
 and Git; the built-in empty tree is explicitly stored when referenced.
 
-## Publication, recovery and upgrades
+## Publication and recovery
 
 Initialization reserves the dedicated repository and policy without creating a
 state ref. Opening a destination acquires its exclusive exporter lock, validates policy and
@@ -305,27 +304,13 @@ dependent on Git, filesystem and storage semantics and is not inferred from
 those tests. Concurrent destructive GC and noncooperating writers are unsupported.
 Lost recovery evidence is not repaired by guessing projection ownership.
 
-Upgrade by building a new destination with the chosen source ID and policy, then:
-
-```sh
-cvsgitrelay coverage OLD.git NEW.git
-```
-
-This command checks that every v1 event identity exists in v2 by checkout path and
-numeric revision, compares live blob bytes and deletion states, and reports
-missing or changed identities. Both repositories must be fully reconciled; it
-does not recover or alter either repository's refs or objects. The v1 reader is
-restricted to this comparison. Existing imports cannot continue through v1 code,
-and no in-place rewrite/migration command is provided. Consumer switching remains
-an explicit operator action. The old mirror remains intact.
-
 ## Tests and performance
 
 `go test ./...` runs versioned object/message goldens, generated small evolution
 schedules, byte/path/integer limits, numeric gaps, alias and nested/vendor/dead
 branch fixtures, source mutation/missing/race checks, cache corruption, real CVS
 binary checkout comparisons, GC, locks, ref divergence, projection deletions,
-state-consistent reads during projection interruption, v1 refusal/coverage, and
+state-consistent reads during projection interruption, and
 returned-error plus SIGKILL recovery boundaries. Source/destination path aliases,
 processes, locale, timezone, inherited Git configuration and connection settings
 are varied by fixtures.

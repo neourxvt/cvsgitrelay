@@ -214,7 +214,7 @@ func ownedNamespace(ref string) bool {
 
 func validateConfig(c Config) error {
 	if c.Version != 2 {
-		return diag.New("unsupported", "config.validate", "destination is not format v2; create a fresh v2 destination; no automatic migration is performed", nil)
+		return diag.New("unsupported", "config.validate", "unsupported destination format", nil)
 	}
 	if c.SourceID != c.Policy.Source || c.Module != c.Policy.Module {
 		return diag.New("config", "config.validate", "inconsistent canonical identity", nil)
@@ -307,12 +307,8 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module, sourc
 	return durableFile(filepath.Join(r.Path, "cvsgitrelay.json"), append(data, '\n'))
 }
 
+// Open validates the destination and completes pending publication before use.
 func Open(ctx context.Context, runner *process.Runner, path string) (*Repository, error) {
-	return openRepository(ctx, runner, path, true)
-}
-
-// Static comparisons require already reconciled inputs and never run a projector.
-func openRepository(ctx context.Context, runner *process.Runner, path string, recover bool) (*Repository, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -333,17 +329,6 @@ func openRepository(ctx context.Context, runner *process.Runner, path string, re
 	if err != nil {
 		return fail(err)
 	}
-	// Inspect the version before strict decoding so v1 receives a migration
-	// refusal without depending on its now unsupported configuration fields.
-	var version struct {
-		Version int `json:"format_version"`
-	}
-	if err := json.Unmarshal(data, &version); err != nil {
-		return fail(err)
-	}
-	if version.Version != 2 {
-		return fail(diag.New("unsupported", "repository.open", "destination requires explicit migration; initialize a fresh v2 destination", nil))
-	}
 	if err := decodeJSON(data, &r.Config); err != nil {
 		return fail(err)
 	}
@@ -361,10 +346,8 @@ func openRepository(ctx context.Context, runner *process.Runner, path string, re
 	if string(format) != "reftable\n" {
 		return fail(diag.New("unsupported", "repository.refs", "v2 destinations require their initialized reftable backend", nil))
 	}
-	if recover {
-		if err := r.recoverPublication(ctx); err != nil {
-			return fail(err)
-		}
+	if err := r.recoverPublication(ctx); err != nil {
+		return fail(err)
 	}
 	if err := r.loadCurrent(ctx); err != nil {
 		return fail(err)

@@ -1,8 +1,6 @@
 # cvsgitrelay
 
 Mirror every supported CVS file revision into a reproducible Git generation.
-V2 is the only Git import format. Existing v1 destinations are rejected without
-changing their refs. Initialize a fresh destination to upgrade.
 
 Build with Go 1.24 or newer, GNU CVS, and Git 2.48 or newer:
 
@@ -60,17 +58,6 @@ from a nonauthoritative local cache. It can miss old-content edits with unchange
 metadata. Damaged or missing caches fall back to source reads. Metadata is always
 re-enumerated over the full scope; valid old cached content can skip a checkout.
 Every report and manifest identifies the verification policy.
-
-For an upgrade, build a fresh v2 destination and compare it with the old mirror:
-
-```sh
-./cvsgitrelay coverage OLD.git NEW.git
-```
-
-The comparison checks revision coverage, live bytes and deletion states. It
-changes no refs or objects. Both destinations must already be reconciled;
-consumer switching is an explicit operator action. No in-place migration is
-provided.
 
 `refs/cvsgitrelay/state` is the authoritative generation. Its deterministic state
 commit contains `manifest.v2` and protects every canonical event and tag snapshot
