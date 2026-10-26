@@ -3,8 +3,10 @@ package relay
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -71,6 +73,11 @@ func TestTrunkImport(t *testing.T) {
 	if len(entries) != 2 || entries["active"].OID == "" || entries["binary file"].OID == "" {
 		t.Fatalf("wrong trunk tree: %+v", entries)
 	}
+	for _, mode := range []string{"metadata", "deep", "tip"} {
+		if _, err := r.Verify(ctx, Options{Scope: "trunk", Mode: mode}); err != nil {
+			t.Fatalf("verify %s: %v", mode, err)
+		}
+	}
 	// A second process must be excluded even when the writer has no pending work.
 	if other, err := Open(ctx, runner, dest); err == nil {
 		other.Close()
@@ -88,5 +95,80 @@ func TestTrunkImport(t *testing.T) {
 	}
 	if s.Imported != 6 || s.Pending != 0 {
 		t.Fatalf("restart failed: %+v", s)
+	}
+	// An isolated external ref deletion must never be treated as a new mirror.
+	if _, err := r.git(ctx, nil, nil, "update-ref", "-d", trunkRef); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if other, err := Open(ctx, runner, dest); err == nil {
+		other.Close()
+		t.Fatal("vanished managed ref was accepted")
+	}
+}
+
+func TestCrashRecovery(t *testing.T) {
+	root, _, _ := fixture(t)
+	bin := filepath.Join(t.TempDir(), "cvsgitrelay")
+	build := exec.Command("go", "build", "-o", bin, "../../cmd/cvsgitrelay")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build CLI: %v\n%s", err, out)
+	}
+	ctx := context.Background()
+	for _, stage := range []string{"scan-start", "scan-complete", "fetch-start", "fetch-complete", "blob-written", "tree-written", "commit-written", "before-publish", "after-publish"} {
+		t.Run(stage, func(t *testing.T) {
+			runner := &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 16 << 20}
+			dest := filepath.Join(t.TempDir(), "mirror.git")
+			if err := Init(ctx, runner, dest, ":fork:"+root, "module"); err != nil {
+				t.Fatal(err)
+			}
+			ordinal := "2"
+			if strings.HasPrefix(stage, "scan-") {
+				ordinal = "1"
+			}
+			cmd := exec.Command(bin, "sync", "--repo", dest, "--scope", "trunk", "--failpoint", "kill:"+stage+":"+ordinal)
+			out, err := cmd.CombinedOutput()
+			e, ok := err.(*exec.ExitError)
+			if !ok || !e.ProcessState.Sys().(syscall.WaitStatus).Signaled() || e.ProcessState.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+				t.Fatalf("expected SIGKILL at %s: %v\n%s", stage, err, out)
+			}
+			r, err := Open(ctx, runner, dest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			if _, err := r.Sync(ctx, Options{Scope: "trunk"}); err != nil {
+				t.Fatal(err)
+			}
+			s, err := r.Verify(ctx, Options{Scope: "trunk", Mode: "deep"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Imported != 6 || s.Pending != 0 {
+				t.Fatalf("incomplete restart: %+v", s)
+			}
+		})
+	}
+}
+
+func TestSourceMutation(t *testing.T) {
+	root, work, _ := fixture(t)
+	ctx := context.Background()
+	runner := &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 16 << 20}
+	dest := filepath.Join(t.TempDir(), "mirror.git")
+	if err := Init(ctx, runner, dest, ":fork:"+root, "module"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(ctx, runner, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.Sync(ctx, Options{Scope: "trunk"}); err != nil {
+		t.Fatal(err)
+	}
+	fixtureCVS(t, root, work, "admin", "-m1.2:rewritten history", "active")
+	if _, err := r.Status(ctx, "trunk"); err == nil {
+		t.Fatal("source log rewrite was accepted")
 	}
 }

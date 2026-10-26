@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -249,6 +250,9 @@ func Open(ctx context.Context, runner *process.Runner, path string) (*Repository
 			return fail(diag.New("conflict", "refs.validate", "unexpected ref in exporter namespace", nil, "ref", ref))
 		}
 	}
+	if err := r.validateCheckpoints(ctx); err != nil {
+		return fail(err)
+	}
 	return r, nil
 }
 
@@ -378,8 +382,9 @@ func decodeJSON(data []byte, dst any) error {
 	if err := d.Decode(dst); err != nil {
 		return err
 	}
-	if d.More() {
-		return fmt.Errorf("trailing JSON data")
+	var extra any
+	if err := d.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("trailing or malformed JSON data")
 	}
 	return nil
 }

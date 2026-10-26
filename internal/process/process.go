@@ -24,27 +24,33 @@ type Runner struct {
 }
 
 type buffer struct {
-	bytes.Buffer
+	// Do not embed bytes.Buffer: its promoted ReadFrom would bypass Write's
+	// output budget when os/exec drains a subprocess pipe through io.Copy.
+	data  bytes.Buffer
 	limit int
 	total int
 	tail  bool
 }
+
+func (b *buffer) Len() int       { return b.data.Len() }
+func (b *buffer) Bytes() []byte  { return b.data.Bytes() }
+func (b *buffer) String() string { return b.data.String() }
 
 func (b *buffer) Write(p []byte) (int, error) {
 	n := len(p)
 	b.total += n
 	if b.tail {
 		if n >= b.limit {
-			b.Reset()
-			_, _ = b.Buffer.Write(p[n-b.limit:])
+			b.data.Reset()
+			_, _ = b.data.Write(p[n-b.limit:])
 		} else {
 			if b.Len()+n > b.limit {
-				b.Next(b.Len() + n - b.limit)
+				b.data.Next(b.Len() + n - b.limit)
 			}
-			_, _ = b.Buffer.Write(p)
+			_, _ = b.data.Write(p)
 		}
 	} else if b.Len() < b.limit {
-		_, _ = b.Buffer.Write(p[:min(n, b.limit-b.Len())])
+		_, _ = b.data.Write(p[:min(n, b.limit-b.Len())])
 	}
 	// Always drain both streams, even after exceeding the storage budget.
 	return n, nil

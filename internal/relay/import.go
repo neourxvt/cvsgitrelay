@@ -3,7 +3,11 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"slices"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"cvsgitrelay/internal/diag"
@@ -110,8 +114,14 @@ func (r *Repository) Status(ctx context.Context, scope string) (Summary, error) 
 }
 
 func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
+	if err := opts.hit("scan-start"); err != nil {
+		return Summary{}, err
+	}
 	in, imports, _, err := r.inspect(ctx)
 	if err != nil {
+		return Summary{}, err
+	}
+	if err := opts.hit("scan-complete"); err != nil {
 		return Summary{}, err
 	}
 	if opts.Scope == "all" && len(in.Revisions) != in.Trunk {
@@ -158,18 +168,30 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 func (r *Repository) importRevision(ctx context.Context, rev *Revision, file *File, opts *Options) (*Imported, error) {
 	blob := "-"
 	if rev.State != "dead" {
+		if err := opts.hit("fetch-start"); err != nil {
+			return nil, err
+		}
 		data, err := r.fetch(ctx, rev)
 		if err != nil {
+			return nil, err
+		}
+		if err := opts.hit("fetch-complete"); err != nil {
 			return nil, err
 		}
 		blob, err = r.oid(ctx, data, nil, "hash-object", "-w", "--stdin")
 		if err != nil {
 			return nil, err
 		}
+		if err := opts.hit("blob-written"); err != nil {
+			return nil, err
+		}
 	}
 	parent := r.Manifest.Refs[rev.Ref]
 	tree, err := r.changeTree(ctx, parent, rev.Path, blob)
 	if err != nil {
+		return nil, err
+	}
+	if err := opts.hit("tree-written"); err != nil {
 		return nil, err
 	}
 	m := metadata(rev, file, blob)
@@ -182,12 +204,52 @@ func (r *Repository) importRevision(ctx context.Context, rev *Revision, file *Fi
 		return nil, err
 	}
 	c := &Imported{OID: oid, Tree: tree, Parent: parent, Kind: "revision", Meta: m, Log: rev.Log}
+	if err := opts.hit("commit-written"); err != nil {
+		return nil, err
+	}
 	if err := r.checkTransition(ctx, c); err != nil {
+		return nil, err
+	}
+	if err := opts.hit("before-publish"); err != nil {
 		return nil, err
 	}
 	if err := r.publish(ctx, rev.Ref, oid, parent); err != nil {
 		return nil, err
 	}
+	if err := opts.hit("after-publish"); err != nil {
+		return nil, err
+	}
 	r.Runner.Log.Debug("revision published", "path_hex", hexBytes(rev.Path), "revision", rev.Number, "ref", rev.Ref, "commit", oid, "blob", blob, "tree", tree, "parent", parent, "state", rev.State)
 	return c, nil
+}
+
+// hit is an explicit developer fault hook, never enabled by default. An ordinal
+// allows testing interruptions after a nonempty prefix of successful imports.
+func (o *Options) hit(stage string) error {
+	if o.Failpoint == "" {
+		return nil
+	}
+	if o.faultCounts == nil {
+		o.faultCounts = map[string]int{}
+	}
+	o.faultCounts[stage]++
+	spec := o.Failpoint
+	kill := strings.HasPrefix(spec, "kill:")
+	spec = strings.TrimPrefix(spec, "kill:")
+	name, ordinal, hasOrdinal := strings.Cut(spec, ":")
+	n := 1
+	if hasOrdinal {
+		parsed, err := strconv.Atoi(ordinal)
+		if err != nil || parsed < 1 {
+			return diag.New("usage", "fault.configure", "invalid failpoint ordinal", err)
+		}
+		n = parsed
+	}
+	if stage != name || o.faultCounts[stage] != n {
+		return nil
+	}
+	if kill {
+		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+	}
+	return diag.New("injected", "fault.inject", "intentional interruption; rerun without --failpoint", nil, "stage", stage, "ordinal", n)
 }

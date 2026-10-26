@@ -39,6 +39,7 @@ func run(args []string) (exit int) {
 	timeout := fs.Duration("command-timeout", 5*time.Minute, "timeout for each CVS/Git command")
 	maxOutput := fs.Int("max-output", 256<<20, "maximum stdout bytes for each subprocess")
 	progress := fs.Duration("progress-interval", 15*time.Second, "minimum interval between progress messages; zero disables them")
+	failpoint := fs.String("failpoint", "", "developer interruption: [kill:]STAGE[:ORDINAL]")
 	if err := fs.Parse(args[1:]); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -89,14 +90,15 @@ func run(args []string) (exit int) {
 		r, err = relay.Open(ctx, runner, *repo)
 		if err == nil {
 			defer r.Close()
-			runner.Log = log.With("source_id", r.Config.SourceID)
+			log = log.With("source_id", r.Config.SourceID, "repo", r.Path)
+			runner.Log = log
 			switch args[0] {
 			case "sync":
-				summary, err = r.Sync(ctx, relay.Options{Scope: *scope, ProgressInterval: *progress})
+				summary, err = r.Sync(ctx, relay.Options{Scope: *scope, ProgressInterval: *progress, Failpoint: *failpoint})
 			case "status":
 				summary, err = r.Status(ctx, *scope)
 			case "verify":
-				err = diag.New("unsupported", "verify", "verification is not implemented yet", nil)
+				summary, err = r.Verify(ctx, relay.Options{Scope: *scope, Mode: *mode, ProgressInterval: *progress})
 			}
 		}
 	} else {
@@ -130,6 +132,8 @@ func exitCode(code string) int {
 		return 7
 	case "io":
 		return 74
+	case "injected":
+		return 8
 	default:
 		return 70
 	}

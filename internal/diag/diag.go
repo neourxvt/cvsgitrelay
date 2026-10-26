@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"runtime/debug"
 	"strings"
 )
 
@@ -51,11 +52,13 @@ func Code(err error) string {
 // frame data on one line so a failed revision is easy to collect and forward.
 func Details(err error, stacks bool) []map[string]any {
 	var chain []map[string]any
+	var deepestStack []string
+	deepestIndex := -1
 	for err != nil {
 		d := map[string]any{}
 		if e, ok := err.(*Error); ok {
 			d["code"], d["operation"], d["message"], d["context"] = e.Code, e.Op, e.Message, e.Fields
-			if stacks {
+			if stacks && len(e.Stack) > 0 {
 				var frames []string
 				it := runtime.CallersFrames(e.Stack)
 				for {
@@ -65,7 +68,8 @@ func Details(err error, stacks bool) []map[string]any {
 						break
 					}
 				}
-				d["stack"] = frames
+				d["location"] = frames[0]
+				deepestStack, deepestIndex = frames, len(chain)
 			}
 		} else {
 			d["message"] = err.Error()
@@ -73,11 +77,28 @@ func Details(err error, stacks bool) []map[string]any {
 		chain = append(chain, d)
 		err = errors.Unwrap(err)
 	}
+	// One full stack at the originating failure plus boundary locations avoids
+	// repeating common caller frames for every wrapping layer.
+	if deepestIndex >= 0 {
+		chain[deepestIndex]["stack"] = deepestStack
+	}
 	return chain
 }
 
 func Failure(log *slog.Logger, err error, stacks bool) {
-	log.Error("operation failed", "code", Code(err), "error", err.Error(), "causes", Details(err, stacks))
+	message := "operation failed"
+	if e, ok := err.(*Error); ok {
+		message = e.Message
+	}
+	build := map[string]any{"go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" || setting.Key == "vcs.modified" {
+				build[setting.Key] = setting.Value
+			}
+		}
+	}
+	log.Error(message, "code", Code(err), "causes", Details(err, stacks), "runtime", build)
 }
 
 // Redact removes the entire locator as well as a password embedded in a CVS
