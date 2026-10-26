@@ -57,6 +57,16 @@ func (b *buffer) Write(p []byte) (int, error) {
 }
 
 func (r *Runner) Run(ctx context.Context, dir string, env []string, input []byte, name string, args ...string) ([]byte, error) {
+	return r.run(ctx, dir, env, input, name, args, false)
+}
+
+// RunQuiet fails on diagnostics even after exit zero. Metadata enumeration
+// cannot safely treat a warning about an omitted file as a complete scan.
+func (r *Runner) RunQuiet(ctx context.Context, dir string, env []string, input []byte, name string, args ...string) ([]byte, error) {
+	return r.run(ctx, dir, env, input, name, args, true)
+}
+
+func (r *Runner) run(ctx context.Context, dir string, env []string, input []byte, name string, args []string, quiet bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -87,8 +97,11 @@ func (r *Runner) Run(ctx context.Context, dir string, env []string, input []byte
 	if cmd.ProcessState != nil {
 		fields = append(fields, "exit_code", cmd.ProcessState.ExitCode())
 	}
-	if err != nil || out.total > out.limit {
+	if err != nil || out.total > out.limit || (quiet && stderr.total > 0) {
 		code, message := "subprocess", "command failed; inspect exit code and stderr"
+		if quiet && stderr.total > 0 && err == nil {
+			message = "metadata command produced stderr despite exit zero; completeness is unproven; resolve the warning or configure a quiet transport"
+		}
 		if ctx.Err() != nil {
 			code, message, err = "timeout", "command interrupted or deadline exceeded", ctx.Err()
 		}
@@ -130,7 +143,7 @@ func environment(extra []string) []string {
 		}
 		env = append(env, value)
 	}
-	env = append(env, "LC_ALL=C", "TZ=UTC", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_NO_REPLACE_OBJECTS=1")
+	env = append(env, "LC_ALL=C", "TZ=UTC", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1")
 	return append(env, extra...)
 }
 

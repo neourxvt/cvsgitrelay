@@ -35,6 +35,7 @@ type Config struct {
 	KeywordMode string `json:"keyword_mode"`
 	FileMode    string `json:"file_mode"`
 	Scope       string `json:"scope"`
+	RefFormat   string `json:"ref_format"`
 }
 
 // Manifest is published as Git history in the same ref transaction as each
@@ -56,7 +57,7 @@ type Repository struct {
 }
 
 func (r *Repository) git(ctx context.Context, input []byte, env []string, args ...string) ([]byte, error) {
-	prefix := []string{"--git-dir=" + r.Path, "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false"}
+	prefix := []string{"--git-dir=" + r.Path, "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false", "-c", "i18n.commitEncoding=UTF-8"}
 	return r.Runner.Run(ctx, "", env, input, "git", append(prefix, args...)...)
 }
 
@@ -90,15 +91,26 @@ func sourceDirectory(root string) (string, error) {
 		if method == "local" || method == "fork" {
 			p = rest
 		} else {
-			idx := strings.Index(rest, ":/")
-			if idx < 0 {
+			slash := strings.IndexByte(rest, '/')
+			if slash < 0 {
 				return "", fmt.Errorf("remote CVSROOT must contain an absolute repository directory")
 			}
-			authority := rest[:idx]
+			authority := rest[:slash]
+			colon := strings.LastIndexByte(authority, ':')
+			if colon < 0 {
+				return "", fmt.Errorf("remote CVSROOT must separate host and repository directory")
+			}
+			port := authority[colon+1:]
+			for _, digit := range port {
+				if digit < '0' || digit > '9' {
+					return "", fmt.Errorf("unsupported CVSROOT port syntax")
+				}
+			}
+			authority = authority[:colon]
 			if at := strings.LastIndexByte(authority, '@'); at >= 0 && strings.Contains(authority[:at], ":") {
 				return "", fmt.Errorf("credentials in CVSROOT are forbidden; use CVS authentication facilities")
 			}
-			p = rest[idx+1:]
+			p = rest[slash:]
 		}
 	}
 	if !filepath.IsAbs(p) || filepath.Clean(p) != p || p == "/" {
@@ -108,7 +120,7 @@ func sourceDirectory(root string) (string, error) {
 }
 
 func validateConfig(c Config) error {
-	if c.Version != 1 || len(c.SourceID) != 32 || c.KeywordMode != "kb" || c.FileMode != "100644" || c.Scope != "all" {
+	if c.Version != 1 || len(c.SourceID) != 32 || c.KeywordMode != "kb" || c.FileMode != "100644" || c.Scope != "all" || c.RefFormat != "reftable" {
 		return diag.New("config", "config.validate", "incompatible immutable configuration; restore the initialized settings", nil)
 	}
 	if _, err := hex.DecodeString(c.SourceID); err != nil {
@@ -119,6 +131,9 @@ func validateConfig(c Config) error {
 	}
 	if err := validatePath(c.Module); err != nil {
 		return err
+	}
+	if strings.HasPrefix(c.Module, "-") {
+		return diag.New("config", "config.validate", "module must not begin with an option prefix", nil)
 	}
 	if !utf8.ValidString(c.Module) {
 		return diag.New("config", "config.validate", "module must be UTF-8; individual file paths may contain other POSIX bytes", nil)
@@ -133,7 +148,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module string
 	if _, err := rand.Read(id); err != nil {
 		return diag.New("io", "init", "generate source identity", err)
 	}
-	c := Config{Version: 1, SourceID: hex.EncodeToString(id), CVSRoot: root, Module: module, KeywordMode: "kb", FileMode: "100644", Scope: "all"}
+	c := Config{Version: 1, SourceID: hex.EncodeToString(id), CVSRoot: root, Module: module, KeywordMode: "kb", FileMode: "100644", Scope: "all", RefFormat: "reftable"}
 	if err := validateConfig(c); err != nil {
 		return err
 	}
@@ -150,7 +165,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module string
 	}
 	r := &Repository{Path: abs, Config: c, Runner: runner}
 	if len(entries) == 0 {
-		if _, err := runner.Run(ctx, "", nil, nil, "git", "-c", "core.hooksPath=/dev/null", "init", "--bare", "--object-format=sha1", abs); err != nil {
+		if _, err := runner.Run(ctx, "", nil, nil, "git", "-c", "core.hooksPath=/dev/null", "init", "--bare", "--object-format=sha1", "--ref-format=reftable", "--template=", abs); err != nil {
 			return err
 		}
 	}
@@ -170,6 +185,17 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module string
 	}
 	if len(refs) != 0 {
 		return diag.New("conflict", "init", "destination must be an empty dedicated bare repository", nil, "ref_count", len(refs))
+	}
+	format, err := r.git(ctx, nil, nil, "rev-parse", "--show-ref-format")
+	if err != nil {
+		return err
+	}
+	if string(format) != "reftable\n" {
+		// The destination is empty and held under the exporter lock. Reftable
+		// publishes the branch and manifest through one stack-file rename.
+		if _, err := r.git(ctx, nil, nil, "refs", "migrate", "--ref-format=reftable"); err != nil {
+			return diag.New("unsupported", "init.refs", "Git with reftable support is required (use Git 2.48 or newer)", err)
+		}
 	}
 	data, _ := json.MarshalIndent(c, "", "  ")
 	f, err := os.OpenFile(filepath.Join(abs, "cvsgitrelay.json"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -221,6 +247,13 @@ func Open(ctx context.Context, runner *process.Runner, path string) (*Repository
 	runner.Root = r.Config.CVSRoot
 	if err := r.validateBare(ctx); err != nil {
 		return fail(err)
+	}
+	format, err := r.git(ctx, nil, nil, "rev-parse", "--show-ref-format")
+	if err != nil {
+		return fail(err)
+	}
+	if string(format) != "reftable\n" {
+		return fail(diag.New("unsupported", "repository.refs", "managed destination must retain its initialized reftable backend", nil))
 	}
 	refs, err := r.allRefs(ctx)
 	if err != nil {

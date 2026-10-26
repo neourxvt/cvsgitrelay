@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -64,6 +65,11 @@ func parseRlog(data []byte, prefix string) (*Inventory, error) {
 		if f.DefaultBranch, ok = take("branch:"); !ok {
 			return nil, parseError(pos, "expected default branch")
 		}
+		if f.DefaultBranch != "" {
+			if b, ok := branchNumber(f.DefaultBranch); !ok || b != f.DefaultBranch {
+				return nil, parseError(pos, "invalid default branch number")
+			}
+		}
 		if _, ok = take("locks:"); !ok {
 			return nil, parseError(pos, "expected locks")
 		}
@@ -83,6 +89,12 @@ func parseRlog(data []byte, prefix string) (*Inventory, error) {
 			name, num, found := strings.Cut(strings.TrimPrefix(lines[pos], "\t"), ": ")
 			if _, err := numbers(num); !found || err != nil || name == "" || strings.ContainsAny(name, "\x00\r\n\t") {
 				return nil, parseError(pos, "invalid symbolic name")
+			}
+			n, _ := numbers(num)
+			if slices.Contains(n, 0) {
+				if _, ok := branchNumber(num); !ok {
+					return nil, parseError(pos, "invalid magic branch symbol")
+				}
 			}
 			if _, exists := f.Symbols[name]; exists {
 				return nil, parseError(pos, "duplicate symbolic name")

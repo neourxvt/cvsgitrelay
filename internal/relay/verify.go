@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"cvsgitrelay/internal/diag"
@@ -18,6 +19,13 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 	s := summarize("verify", opts.Scope, in, imports, r.Manifest.Refs)
 	if s.Pending != 0 {
 		return s, diag.New("integrity", "verify.metadata", "requested scope has missing revision identities; run sync", nil, "scope", opts.Scope, "pending", s.Pending, "unimported", s.Unimported)
+	}
+	if opts.Scope == "all" {
+		for ref := range in.Branches {
+			if r.Manifest.Refs[ref] == "" {
+				return s, diag.New("integrity", "verify.metadata", "branch has no published seed; run sync", nil, "ref", ref)
+			}
+		}
 	}
 	if opts.Mode == "deep" {
 		for _, rev := range in.Ordered {
@@ -63,14 +71,34 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 
 func inventoryFingerprint(in *Inventory) string {
 	var b strings.Builder
+	paths := make([]string, 0, len(in.Files))
+	for path := range in.Files {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	for _, path := range paths {
+		f := in.Files[path]
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00", path, f.Head, f.DefaultBranch)
+		names := make([]string, 0, len(f.Symbols))
+		for name := range f.Symbols {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		for _, name := range names {
+			fmt.Fprintf(&b, "%s\x00%s\x00", name, f.Symbols[name])
+		}
+		b.WriteByte('\n')
+	}
 	for _, r := range in.Ordered {
-		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00", r.Path, r.Number, r.Author, r.Time, r.State, r.Ref, digest(r.Log))
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00", r.Path, r.Number, r.Author, r.Time, r.State, r.Ref, r.CommitID, digest(r.Log))
 	}
 	return digest([]byte(b.String()))
 }
 
 func (r *Repository) verifyTip(ctx context.Context, in *Inventory, scope string) error {
-	if err := r.compareCheckout(ctx, trunkRef, "HEAD"); err != nil {
+	// CVS HEAD may follow a file's default vendor branch. Numeric major 1
+	// selects the 1.N trunk line independently of default-branch settings.
+	if err := r.compareCheckout(ctx, trunkRef, "1"); err != nil {
 		return err
 	}
 	if scope == "trunk" {

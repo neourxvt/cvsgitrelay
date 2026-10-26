@@ -87,7 +87,7 @@ func (r *Repository) validateBranches(ctx context.Context, in *Inventory, import
 				return err
 			}
 			c := imports[key(path, rev)]
-			if c == nil || in.Branches[ref][path] != rev {
+			if c == nil || in.Branches[ref][path] != rev || r.Manifest.Members[ref][pathHex] != rev {
 				return diag.New("integrity", "branch.validate", "seed forkpoint disappeared or branch symbol moved", nil, "ref", ref, "path_hex", pathHex, "forkpoint", rev)
 			}
 			e, present := entries[path]

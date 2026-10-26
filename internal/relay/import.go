@@ -62,6 +62,10 @@ func (r *Repository) validatePublished(ctx context.Context, in *Inventory, impor
 			return diag.New("integrity", "source.compare", "published revision disappeared upstream; history removal or incomplete scan", nil, "path_hex", c.Meta.PathHex, "revision", c.Meta.Revision, "commit", c.OID)
 		}
 		expected := metadata(rev, in.Files[rev.Path], c.Meta.Blob)
+		// CVS clears a file's default vendor branch during an ordinary trunk
+		// check-in. This field records what was observed at import time; it is
+		// not immutable per-revision metadata or the revision's destination.
+		expected.DefaultBranch = c.Meta.DefaultBranch
 		a, _ := json.Marshal(expected)
 		b, _ := json.Marshal(c.Meta)
 		if string(a) != string(b) {

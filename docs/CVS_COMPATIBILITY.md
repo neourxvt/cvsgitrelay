@@ -19,11 +19,20 @@ Only a terminal Attic component is removed. Newline, carriage return, tab and
 NUL in paths cannot be represented unambiguously by this rlog dialect and are
 rejected. Other POSIX path bytes are retained, with hex encoding in provenance.
 
+Independent checkout fixtures use numeric major `-r 1` for trunk. GNU CVS `HEAD`
+can follow a default vendor branch and is not the numeric trunk selector.
+Named branch checkout fixtures include different per-file forkpoints, a file
+with no branch changes, branch-only files, late additions, deletion/re-addition,
+and vendor updates followed by a first ordinary trunk edit.
+
 Each new client/server dialect needs its own capability run. A successful CVS
 exit alone does not establish complete enumeration. The parser must validate
 headers, declared counts, revision uniqueness and dependencies. A log message
 that impersonates a complete record boundary must produce an error rather than
 an inferred revision. No RCS archive is read directly by the exporter.
+Discovery also rejects nonempty stderr after exit zero: a warning about an
+inaccessible or skipped file cannot be treated as complete history. Remote
+transports must keep login banners and unrelated messages off this stream.
 
 The Go implementation replaces the proposal's C/Meson build with Go modules and
 the standard library. Installed CVS and Git remain the only runtime dependencies.

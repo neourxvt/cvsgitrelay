@@ -58,7 +58,7 @@ func run(args []string) (exit int) {
 	}
 	id := make([]byte, 8)
 	_, _ = rand.Read(id)
-	log := slog.New(handler).With("run_id", hex.EncodeToString(id), "command", args[0])
+	log := slog.New(handler).With("run_id", hex.EncodeToString(id), "command", args[0], "repo", *repo)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			// Panic values can contain source data. Retain type and Go frames,
@@ -90,7 +90,7 @@ func run(args []string) (exit int) {
 		r, err = relay.Open(ctx, runner, *repo)
 		if err == nil {
 			defer r.Close()
-			log = log.With("source_id", r.Config.SourceID, "repo", r.Path)
+			log = log.With("source_id", r.Config.SourceID)
 			runner.Log = log
 			switch args[0] {
 			case "sync":

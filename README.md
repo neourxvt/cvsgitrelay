@@ -4,7 +4,7 @@ A Go command line mirror from CVS file revisions to a dedicated bare Git
 repository. It uses the standard CVS client for discovery and exact byte
 retrieval, and Git plumbing for objects and atomic ref publication.
 
-Build with Go 1.24 or newer:
+Build with Go 1.24 or newer. Runtime dependencies are CVS and Git 2.48 or newer:
 
 ```sh
 go build ./cmd/cvsgitrelay
@@ -20,6 +20,9 @@ Use a literal repository directory module. Configure authentication through CVS
 facilities; passwords embedded in CVSROOT are rejected. Source settings live in
 `mirror.git/cvsgitrelay.json`, mode 0600, and are pinned by a fingerprint in Git.
 The dedicated destination must initially be an empty bare SHA-1 repository.
+New destinations use Git's reftable ref backend; existing empty bare
+destinations are converted during init. This backend is required so the import
+ref and ownership checkpoint share one atomic publication boundary.
 The exporter does not write to CVS.
 
 One CVS file revision creates one Git import commit, including dead revisions
@@ -43,12 +46,21 @@ reports all remaining identities. Static CVS tags and merge reconstruction are
 outside scope. Multiple symbols owning the same revision line are rejected
 until branch alias semantics have an explicit policy.
 
+Files added later on a named branch enter through their dead trunk forkpoint
+and real branch revisions. A newly applied symbol that would retroactively add
+a live forkpoint to an existing branch is rejected before publication. Named
+branch trees are checked against independent CVS checkouts by `verify --mode
+tip`. Trunk always means numeric `1.N` history; it does not follow CVS's mutable
+default vendor branch. Use `git clone --branch cvs/trunk ./mirror.git checkout`
+to check out the trunk mirror.
+
 `refs/cvsgitrelay/state` contains an append-only Git checkpoint manifest. An
 `update-ref --stdin` transaction advances both the import branch and this
 manifest, with expected old object IDs. This small extension to the proposal
 lets ref removal and rewinds be detected without an independent database or a
 non-atomic local manifest. Published Git objects and refs remain authoritative.
-Keep the state ref when backing up or transporting the mirror.
+Keep the state ref when backing up or transporting the mirror. See
+[implementation decisions](docs/DESIGN.md) for the publication policy.
 
 Each import begins with exactly four canonical provenance lines and a blank
 line: `cvsgitrelay-Version`, `cvsgitrelay-Source-ID`, `cvsgitrelay-Kind`, and
@@ -58,6 +70,9 @@ ref, state, blob, source author, timestamp, optional CVS commit ID, default
 branch, and log encoding/digest. Source path/author bytes use hex. The message
 body retains the CVS-exposed log bytes, or reversible base64 if those bytes are
 not UTF-8 or contain NUL. Source log text cannot override provenance.
+The recorded default branch is an observation at import time; ordinary CVS
+trunk check-ins may subsequently clear this setting without altering old
+revision identities or their destinations.
 
 Diagnostics go to stderr; stdout contains a single JSON operation summary.
 Use `--log-format json` for collecting runtime reports and `--log-level debug`
@@ -79,7 +94,8 @@ to other tools. Unreferenced objects after interrupted runs are harmless.
 
 Exit codes: 2 arguments; 3 configuration; 4 unsupported source; 5 parse/source
 integrity; 6 ref conflict or writer contention; 7 subprocess/deadline/output
-limit; 70 internal error; 74 local I/O. Only successful operations exit zero.
+limit; 8 intentional fault injection; 70 internal error; 74 local I/O.
+Only successful operations exit zero.
 
 See [CVS compatibility](docs/CVS_COMPATIBILITY.md) and [the proposal](PROPOSAL.md).
 See [recovery and verification](docs/RECOVERY.md) for interruption handling.

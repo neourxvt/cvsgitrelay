@@ -97,7 +97,7 @@ func validatePath(path string) error {
 		return diag.New("source", "path.validate", "unsupported or ambiguous path", nil, "path_hex", hexBytes(path))
 	}
 	for _, part := range strings.Split(path, "/") {
-		if part == "" || part == "." || part == ".." || strings.EqualFold(part, ".git") || part == "CVS" || strings.HasPrefix(part, "-") {
+		if part == "" || part == "." || part == ".." || strings.EqualFold(part, ".git") || part == "CVS" {
 			return diag.New("source", "path.validate", "unsafe CVS/Git path component", nil, "path_hex", hexBytes(path))
 		}
 	}

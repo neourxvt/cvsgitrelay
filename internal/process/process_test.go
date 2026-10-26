@@ -22,10 +22,11 @@ func TestProcessFailures(t *testing.T) {
 		{"partial", "subprocess", time.Second},
 		{"limit", "limit", time.Second},
 		{"hang", "timeout", 20 * time.Millisecond},
+		{"warning", "subprocess", time.Second},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			r := Runner{Log: DiscardLogger(), Timeout: tc.timeout, MaxOutput: 1024, Root: ":pserver:user:secret@host:/repo"}
-			out, err := r.Run(context.Background(), "", []string{"CVSGITRELAY_PROCESS_HELPER=1"}, nil, bin, "-test.run=TestProcessHelper", "--", tc.mode)
+			out, err := r.RunQuiet(context.Background(), "", []string{"CVSGITRELAY_PROCESS_HELPER=1"}, nil, bin, "-test.run=TestProcessHelper", "--", tc.mode)
 			if out != nil || diag.Code(err) != tc.code {
 				t.Fatalf("got output=%d code=%s error=%v", len(out), diag.Code(err), err)
 			}
@@ -50,6 +51,10 @@ func TestProcessHelper(t *testing.T) {
 		os.Exit(0)
 	case "hang":
 		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "warning":
+		_, _ = os.Stdout.WriteString("partial metadata")
+		_, _ = os.Stderr.WriteString("omitting inaccessible file\n")
 		os.Exit(0)
 	}
 }

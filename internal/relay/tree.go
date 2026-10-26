@@ -18,7 +18,23 @@ func (r *Repository) changeTree(ctx context.Context, parent, path, blob string) 
 }
 
 func (r *Repository) seedTree(ctx context.Context, entries map[string]string) (string, error) {
-	return r.writeTree(ctx, "", entries)
+	tree, err := r.writeTree(ctx, "", entries)
+	if err != nil {
+		return "", err
+	}
+	actual, err := r.treeEntries(ctx, tree)
+	if err != nil {
+		return "", err
+	}
+	if len(actual) != len(entries) {
+		return "", diag.New("source", "branch.seed", "seed paths conflict as files and directories", nil, "expected_files", len(entries), "actual_files", len(actual))
+	}
+	for path, blob := range entries {
+		if actual[path].OID != blob {
+			return "", diag.New("source", "branch.seed", "seed path was replaced by a conflicting directory", nil, "path_hex", hexBytes(path))
+		}
+	}
+	return tree, nil
 }
 
 func (r *Repository) writeTree(ctx context.Context, parent string, entries map[string]string) (string, error) {

@@ -8,6 +8,9 @@ import (
 
 func (r *Repository) cvs(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	prefix := []string{"-f", "-Q", "-d", r.Config.CVSRoot}
+	if len(args) > 0 && args[0] == "rlog" {
+		return r.Runner.RunQuiet(ctx, dir, nil, nil, "cvs", append(prefix, args...)...)
+	}
 	return r.Runner.Run(ctx, dir, nil, nil, "cvs", append(prefix, args...)...)
 }
 
