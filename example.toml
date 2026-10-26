@@ -57,7 +57,7 @@ scope = "all"
 
 # Parallel CVS revision reads. Scheduling never affects canonical bytes.
 # CLI override: --connections
-connections = 2
+connections = 1
 
 [verify]
 # Fixed canonical source verification policy, applied on every sync/status/verify:
