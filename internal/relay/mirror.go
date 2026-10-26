@@ -43,10 +43,12 @@ func (m *cvsMirror) writeFile(ctx context.Context, root string, file *File, conn
 		// earlier revisions must precede its own replacement scripts.
 		return compareNumber(a.Number, b.Number)
 	})
+	m.progress.update("activity", "Reading revision contents")
 	contents, origins, err := m.contents(ctx, revisions, connections)
 	if err != nil {
 		return err
 	}
+	m.progress.update("activity", "Building CVS archive")
 	branches := map[string][]string{}
 	next := map[string]string{}
 	base := map[string]string{}
@@ -169,7 +171,9 @@ func (m *cvsMirror) writeFile(ctx context.Context, root string, file *File, conn
 	// Validate each reconstructed delta with CVS itself while the expected bytes
 	// are still in memory. Metadata alone cannot establish correct deltatexts.
 	local := &Repository{Config: Config{CVSRoot: root, Module: m.source.Config.Module}, Runner: m.source.Runner}
+	m.progress.update("activity", "Verifying generated revisions")
 	for _, revision := range revisions {
+		m.progress.update("revision", revision.Number)
 		raw, err := local.cvs(ctx, "", "rannotate", "-F", "-r", revision.Number, revision.SourcePath)
 		if err != nil {
 			return err

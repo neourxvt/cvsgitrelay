@@ -87,12 +87,14 @@ func buildMirrorInventory(files []*File) (*Inventory, error) {
 
 // Read administration through CVS too, retaining every readable versioned
 // administrative archive without applying its contents as local runtime policy.
-func (r *Repository) mirrorScan(ctx context.Context) (*Inventory, error) {
+func (r *Repository) mirrorScan(ctx context.Context, progress *mirrorProgress) (*Inventory, error) {
 	in, err := r.scan(ctx)
 	if err != nil {
 		return nil, err
 	}
 	root, _ := sourceDirectory(r.Config.CVSRoot)
+	progress.update("activity", "Reading CVS administration history", "path", "CVSROOT/")
+	r.Runner.Log.Info("Reading CVS administration history", "path", "CVSROOT/")
 	data, err := r.cvs(ctx, "", "rlog", "CVSROOT/")
 	if err != nil {
 		return nil, err

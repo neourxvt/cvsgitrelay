@@ -48,6 +48,7 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory) error
 	}
 	slices.Sort(roots)
 	for _, source := range roots {
+		m.progress.stage("Observing CVS permissions and directories", "path", source)
 		directorySet[source] = true
 		workspace, err := os.MkdirTemp(m.state, "work-tree-")
 		if err != nil {
@@ -118,6 +119,7 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory) error
 		if live == nil {
 			continue
 		}
+		m.progress.stage("Observing historical CVS file permissions", "path", file.SourcePath, "revision", live.Number)
 		workspace, err := os.MkdirTemp(m.state, "work-mode-")
 		if err != nil {
 			return err

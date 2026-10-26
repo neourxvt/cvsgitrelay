@@ -65,6 +65,7 @@ type mirrorRevision struct {
 
 type cvsMirror struct {
 	source              *Repository
+	progress            *mirrorProgress
 	output              string
 	state               string
 	entries             map[string]mirrorEntry
@@ -188,7 +189,10 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	}()
 	// Failed attempts retain their generated archives and checkout observations.
 	// A retry must not discard them before it has published a validated mirror.
-	before, err := m.source.mirrorScan(ctx)
+	m.progress = newMirrorProgress(ctx, runner.Log, options.ProgressInterval)
+	defer m.progress.close()
+	m.progress.stage("Scanning source CVS history", "module", module)
+	before, err := m.source.mirrorScan(ctx, m.progress)
 	if err != nil {
 		return summary, err
 	}
@@ -213,12 +217,15 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 			return summary, err
 		}
 	}
+	m.progress.stage("Loading retained mirror downloads", "revisions", len(before.Revisions))
 	if err = m.loadEntries(before); err != nil {
 		return summary, err
 	}
+	runner.Log.Info("Retained mirror downloads loaded", "cached_revisions", len(m.entries))
 	if legacy {
 		// Bootstrap the durable cache from the earlier local copy. No old live
 		// revision needs to be downloaded again from the remote CVS server.
+		m.progress.stage("Reading existing local mirror history")
 		local := &Repository{Config: Config{CVSRoot: output, Module: module}, Runner: runner, Submodules: "include", mirroring: true}
 		previous, err := local.scan(ctx)
 		if err != nil {
@@ -253,6 +260,7 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	if err = mirrorWrite(identityPath, encodedIdentity); err != nil {
 		return summary, err
 	}
+	m.progress.stage("Reading CVS module definitions")
 	_, definitions, err := m.source.moduleLayout(ctx)
 	if err != nil {
 		return summary, err
@@ -278,19 +286,18 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	}
 	slices.Sort(paths)
 	runner.Log.Info("Mirror inventory ready", "files", len(paths), "revisions", len(before.Revisions))
-	lastProgress := time.Now()
+	m.progress.stage("Acquiring mirror revisions", "files", len(paths), "revisions", len(before.Revisions), "files_completed", 0, "downloaded", 0, "reused", 0)
 	for i, path := range paths {
+		m.progress.update("path", path)
 		if err = m.writeFile(ctx, staging, before.Files[path], options.Connections); err != nil {
 			return summary, err
 		}
-		if options.ProgressInterval > 0 && time.Since(lastProgress) >= options.ProgressInterval {
-			runner.Log.Info("Mirror progress", "files_completed", i+1, "files", len(paths), "downloaded", m.summary.Downloaded, "reused", m.summary.Reused)
-			lastProgress = time.Now()
-		}
+		m.progress.update("files_completed", i+1)
 	}
 	// Matching scans bound source movement; they do not assert a server-wide
 	// atomic snapshot. Cached immutable revisions are checked before any publish.
-	after, err := m.source.mirrorScan(ctx)
+	m.progress.stage("Checking source CVS history again", "module", module)
+	after, err := m.source.mirrorScan(ctx, m.progress)
 	if err != nil {
 		return summary, err
 	}
@@ -298,7 +305,8 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 		return summary, diag.New("source", "mirror.compare", "CVS history changed during mirroring; rerun to reuse completed downloads", nil)
 	}
 	local := &Repository{Config: Config{CVSRoot: staging, Module: module}, Runner: runner, Submodules: "include", mirroring: true}
-	copied, err := local.mirrorScan(ctx)
+	m.progress.stage("Checking generated CVS history", "module", module)
+	copied, err := local.mirrorScan(ctx, m.progress)
 	if err != nil {
 		return summary, err
 	}
@@ -308,19 +316,23 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	if err = ctx.Err(); err != nil {
 		return summary, err
 	}
+	m.progress.stage("Publishing local CVS mirror", "downloaded", m.summary.Downloaded, "reused", m.summary.Reused)
 	if err = m.preserveAdministration(staging, before); err != nil {
 		return summary, err
 	}
 	if err = m.publish(ctx, staging); err != nil {
 		return summary, err
 	}
+	m.progress.stage("Normalizing local CVS mirror")
 	if err = m.canonicalize(before); err != nil {
 		return summary, err
 	}
+	m.progress.stage("Removing temporary work after successful publication")
 	if err = m.cleanupWork(); err != nil {
 		return summary, err
 	}
 	m.summary.Files, m.summary.Revisions = len(before.Files), len(before.Revisions)
+	runner.Log.Info("Mirror complete", "files", m.summary.Files, "revisions", m.summary.Revisions, "downloaded", m.summary.Downloaded, "reused", m.summary.Reused)
 	return m.summary, nil
 }
 
@@ -444,6 +456,7 @@ func (m *cvsMirror) contents(ctx context.Context, revisions []*Revision, connect
 	})
 	defer fetches.close()
 	for _, rev := range revisions {
+		m.progress.update("activity", "Reading revision contents", "path", rev.SourcePath, "revision", rev.Number)
 		entry, exists := m.entries[mirrorKey(rev)]
 		raw := entry.Annotation
 		if !exists || !entry.Annotated {
@@ -489,6 +502,7 @@ func (m *cvsMirror) contents(ctx context.Context, revisions []*Revision, connect
 				return nil, nil, err
 			}
 		}
+		m.progress.update("downloaded", m.summary.Downloaded, "reused", m.summary.Reused)
 		contents[rev.Number], origins[rev.Number] = data, labels
 	}
 	// Annotation synthesizes a final newline. An unchanged unterminated line
