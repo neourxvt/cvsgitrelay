@@ -30,6 +30,13 @@ module = "rxvt-unicode"
 # CLI override: --submodules
 submodules = "exclude"
 
+# False (default): warn about skipped revision numbers and proceed with the
+# revisions CVS lists. True: reject any numbering gap before importing.
+# Applies to sync, status and verify; can change between runs. Count checks,
+# missing forkpoint checks and checks against published history remain enabled.
+# CLI override: --require-consecutive-revisions[=false]
+require_consecutive_revisions = false
+
 [destination]
 # Required dedicated bare Git destination. Sync initializes a new destination
 # automatically; init is also available explicitly. Existing nonempty unmanaged

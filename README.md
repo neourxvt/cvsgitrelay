@@ -63,8 +63,15 @@ CVS authors are preserved as hex metadata and shown as escaped ASCII Git names.
 CVS timestamps use UTC. No changeset grouping or historical Git tags are inferred.
 
 Trunk imports target `refs/heads/cvs/trunk`. Full metadata discovery occurs on
-every run. Missing history, revision gaps, metadata changes, unsupported source
-syntax and unexpected managed ref movement fail visibly.
+every run. Numbering gaps already present in CVS's listed history produce a
+warning; accessible revisions are linked in numeric order without inventing
+missing versions. Set `source.require_consecutive_revisions = true` in TOML
+or pass `--require-consecutive-revisions` to reject numbering gaps instead.
+This policy applies to sync, status and verify and can change between runs.
+Declared revision counts must match the parsed records in either mode.
+Previously imported revisions disappearing or changing, missing branch
+forkpoints, unsupported source syntax and unexpected managed ref movement
+fail visibly.
 
 The default scope is `all` within the configured module selection. Named CVS branches use
 `refs/heads/cvs/branches/<hex-name>`, initialized by an explicitly synthetic

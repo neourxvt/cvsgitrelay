@@ -28,9 +28,10 @@ type Config struct {
 }
 
 type Source struct {
-	CVSRoot    string `toml:"cvsroot"`
-	Module     string `toml:"module"`
-	Submodules string `toml:"submodules"`
+	CVSRoot                     string `toml:"cvsroot"`
+	Module                      string `toml:"module"`
+	Submodules                  string `toml:"submodules"`
+	RequireConsecutiveRevisions bool   `toml:"require_consecutive_revisions"`
 }
 
 type Destination struct {

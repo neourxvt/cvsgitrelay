@@ -49,6 +49,7 @@ type Inventory struct {
 	Trunk             int
 	Dead              int
 	Vendor            int
+	NumberingGaps     int // skipped numeric ranges, not missing parsed records
 }
 
 func key(path, number string) string { return path + "\x00" + number }
@@ -150,11 +151,16 @@ func buildInventory(files []*File) (*Inventory, error) {
 		}
 		for line, revs := range lines {
 			slices.SortFunc(revs, func(a, b *Revision) int { return compareNumber(a.Number, b.Number) })
+			previousOrdinal := 0
 			for i, r := range revs {
 				n, _ := numbers(r.Number)
-				if n[len(n)-1] != i+1 {
-					return nil, diag.New("source", "inventory", "revision gap; administrative removal or incomplete enumeration requires investigation", nil, "path_hex", hexBytes(f.Path), "revision", r.Number, "expected_ordinal", i+1)
+				ordinal := n[len(n)-1]
+				if ordinal-previousOrdinal > 1 {
+					in.NumberingGaps++
 				}
+				previousOrdinal = ordinal
+				// Numbers may skip in CVS's listed history. Link accessible
+				// revisions; count checks and published metadata guard omissions.
 				if i > 0 {
 					r.Predecessor = revs[i-1].Number
 				} else if line != "trunk" {

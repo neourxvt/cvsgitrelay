@@ -51,6 +51,13 @@ func (r *Repository) scan(ctx context.Context) (*Inventory, error) {
 	}
 	in.Layout = selected
 	in.Submodules = policy
+	if in.NumberingGaps > 0 {
+		if r.RequireConsecutiveRevisions {
+			return nil, diag.New("source", "cvs.scan", "CVS history skips revision numbers; consecutive revisions are required by configuration", nil,
+				"gap_ranges", in.NumberingGaps, "option", "source.require_consecutive_revisions")
+		}
+		r.Runner.Log.Warn("CVS history skips revision numbers; only listed revisions can be imported", "gap_ranges", in.NumberingGaps)
+	}
 	r.Runner.Log.Debug("CVS module layout resolved", "module", r.Config.Module, "submodules", policy, "mapping", selected, "excluded_mapping", in.Excluded)
 	r.Runner.Log.Debug("source inventory validated", "files", len(in.Files), "revisions", len(in.Revisions), "trunk", in.Trunk, "nontrunk", len(in.Revisions)-in.Trunk, "dead", in.Dead, "vendor", in.Vendor)
 	return in, nil

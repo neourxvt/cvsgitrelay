@@ -24,19 +24,20 @@ import (
 )
 
 type cliOptions struct {
-	repo             string
-	cvsroot          string
-	module           string
-	submodules       string
-	scope            string
-	mode             string
-	logFormat        string
-	logLevel         string
-	errorStacks      bool
-	commandTimeout   time.Duration
-	maxOutput        int
-	progressInterval time.Duration
-	failpoint        string
+	repo                        string
+	cvsroot                     string
+	module                      string
+	submodules                  string
+	requireConsecutiveRevisions bool
+	scope                       string
+	mode                        string
+	logFormat                   string
+	logLevel                    string
+	errorStacks                 bool
+	commandTimeout              time.Duration
+	maxOutput                   int
+	progressInterval            time.Duration
+	failpoint                   string
 }
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -95,6 +96,7 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 	flags.StringVar(&options.cvsroot, "cvsroot", "", "override source.cvsroot; use external authentication")
 	flags.StringVar(&options.module, "module", "", "override source.module")
 	flags.StringVar(&options.submodules, "submodules", "exclude", "override source.submodules: exclude or include")
+	flags.BoolVar(&options.requireConsecutiveRevisions, "require-consecutive-revisions", false, "override source.require_consecutive_revisions: reject numbering gaps")
 	flags.StringVar(&options.scope, "scope", "all", "override sync.scope: trunk or all")
 	flags.StringVar(&options.logFormat, "log-format", "text", "override logging.format: text or json")
 	flags.StringVar(&options.logLevel, "log-level", "info", "override logging.level: debug, info, warn or error")
@@ -152,6 +154,8 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			cfg.Source.Module = options.module
 		case "submodules":
 			cfg.Source.Submodules = options.submodules
+		case "require-consecutive-revisions":
+			cfg.Source.RequireConsecutiveRevisions = options.requireConsecutiveRevisions
 		case "scope":
 			cfg.Sync.Scope = options.scope
 		case "mode":
@@ -210,6 +214,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 		log = log.With("source_id", repository.Config.SourceID)
 		runner.Log = log
 		if err = repository.ConfigureSource(cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.Submodules); err == nil {
+			repository.RequireConsecutiveRevisions = cfg.Source.RequireConsecutiveRevisions
 			switch operation {
 			case "sync":
 				summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint})

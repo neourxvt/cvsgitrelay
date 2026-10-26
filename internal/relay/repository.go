@@ -56,7 +56,9 @@ type Repository struct {
 	StateOID   string
 	Manifest   Manifest
 	Submodules string
-	lock       *os.File
+	// Runtime discovery policy, independent of the mirror's source identity.
+	RequireConsecutiveRevisions bool
+	lock                        *os.File
 }
 
 // ConfigureSource checks the requested source against the mirror's immutable
