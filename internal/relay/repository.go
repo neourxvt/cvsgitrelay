@@ -50,6 +50,8 @@ type Manifest struct {
 }
 
 type Repository struct {
+	// Mirroring preserves source records without imposing Git import policies.
+	mirroring  bool
 	Path       string
 	Config     Config
 	Runner     *process.Runner

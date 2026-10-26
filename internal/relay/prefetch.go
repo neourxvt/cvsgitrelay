@@ -24,14 +24,19 @@ type revisionFetches struct {
 }
 
 func newRevisionFetches(ctx context.Context, revisions []*Revision, connections int, fetch func(context.Context, *Revision) ([]byte, error)) *revisionFetches {
-	ctx, cancel := context.WithCancel(ctx)
-	f := &revisionFetches{ctx: ctx, cancel: cancel}
 	var live []*Revision
 	for _, rev := range revisions {
 		if rev.State != "dead" {
 			live = append(live, rev)
 		}
 	}
+	return newAllRevisionFetches(ctx, live, connections, fetch)
+}
+
+// Mirror acquisition includes dead revisions because annotation exposes them.
+func newAllRevisionFetches(ctx context.Context, live []*Revision, connections int, fetch func(context.Context, *Revision) ([]byte, error)) *revisionFetches {
+	ctx, cancel := context.WithCancel(ctx)
+	f := &revisionFetches{ctx: ctx, cancel: cancel}
 	count := min(connections, len(live))
 	f.lanes = make([]chan fetchResult, count)
 	for lane := range count {

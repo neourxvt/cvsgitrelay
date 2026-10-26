@@ -33,7 +33,7 @@ func (r *Repository) scan(ctx context.Context) (*Inventory, error) {
 	for _, mapping := range layout {
 		mappings = append(mappings, rlogMapping{RCSPrefix: dir + "/" + mapping.Source + "/", SourcePrefix: mapping.Source, DestinationPrefix: mapping.Destination, Excluded: policy == "exclude" && mapping.Destination != ""})
 	}
-	in, err := parseMappedRlog(out, mappings)
+	in, err := parseMappedRlogMode(out, mappings, r.mirroring)
 	if err != nil {
 		return nil, err
 	}

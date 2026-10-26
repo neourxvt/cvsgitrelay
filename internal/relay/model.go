@@ -22,6 +22,9 @@ type Revision struct {
 	Time        int64
 	Log         []byte
 	CommitID    string
+	Locker      string
+	Lines       string
+	Branches    []string
 	Line        string
 	Predecessor string
 	Ref         string
@@ -32,7 +35,13 @@ type File struct {
 	SourcePath    string
 	Head          string
 	DefaultBranch string
+	KeywordMode   string
+	Description   []byte
 	Symbols       map[string]string
+	StrictLocks   bool
+	Locks         map[string]string
+	Access        []string
+	InAttic       bool
 	Revisions     []*Revision
 }
 

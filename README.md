@@ -29,6 +29,94 @@ later runs import newly available history. `./sync-rxvt-unicode.sh` builds and
 syncs using `example.toml`; run `./sync-rxvt-unicode.sh your.toml` to select a
 different configuration.
 
+For repeated debugging runs, create a local CVSROOT once and update it by
+repeating the same command:
+
+```sh
+./cvsgitrelay mirror example.toml --output ./cvsroot-rxvt-unicode
+./cvsgitrelay mirror example.toml --output ./cvsroot-rxvt-unicode
+./cvsgitrelay example.toml --cvsroot "$PWD/cvsroot-rxvt-unicode" --repo ./git-debug-1
+./cvsgitrelay example.toml --cvsroot "$PWD/cvsroot-rxvt-unicode" --repo ./git-debug-2
+```
+
+`mirror` uses the standard CVS client, including pserver authentication, and
+requires no rsync or server filesystem access. `--output` is required and relative
+to the caller; its parent must exist. The Git destination from TOML is unused.
+Mirrors always include every supported revision line and included module,
+regardless of `sync.scope` and `source.submodules`. `--connections` controls
+concurrent revision downloads within each file. Existing generated CVSROOT copies
+without a cache are adopted using their local revision contents.
+Other nonempty CVS repositories are rejected.
+
+Completed downloads are saved atomically in `.cvsgitrelay-mirror` inside the
+CVSROOT. Repeated runs reuse cached revision bodies and annotations. Each run also
+refreshes temporary current checkouts to observe permissions and empty directories.
+An unchanged run performs zero historical revision downloads and zero archive
+updates; the current-tree observation can transfer current file contents.
+The summary reports `downloaded`, `reused` and `updated_files`. Interruptions keep
+completed downloads for reuse. Failures, including a final metadata comparison
+failure, retain the output directory, cached revisions, generated archives and
+observation checkouts. Unpublished work is under `.cvsgitrelay-mirror/work-*`;
+it remains available across failed retries and is removed only after a validated
+mirror has been published successfully. Retry with the same `--output` directory
+to reuse completed revision downloads. A writer lock prevents overlapping mirror runs.
+Do not remove the internal cache if you want incremental updates and recovery.
+
+For equal accessible source state and the same mirror format, fresh and
+incremental mirrors converge to identical file paths, bytes, modes and epoch
+mtimes, including administration and cache files. Output paths, CVS transports,
+usernames, wall-clock time, polling schedule and connection counts do not enter
+the generated contents. This guarantee covers the local CVSROOT; Git import
+reproducibility is a separate concern described in
+[the reproducibility proposal](doc-proposal-reproducibility.md).
+
+Cached revision metadata and content digests are checked before reuse. Missing
+or changed historical revision metadata and changed module layouts are rejected.
+New revisions and updates to symbols, descriptions, keyword modes, default
+branches, locks, access lists and observed permissions regenerate the affected
+archives or their metadata. Existing revision payloads are
+assumed immutable upstream; byte-only upstream edits cannot be detected without
+refetching them. Corrupted local cached bytes fail their digest checks.
+
+Archives are staged and checked with local CVS, including live revision bytes,
+all revision annotations, diff statistics, locks and access metadata, before
+publication. A second source scan rejects observed source changes;
+it does not prove a repository-wide atomic source snapshot. Publication replaces
+files atomically, one at a time. An interruption during publication can leave a
+partially updated tree; rerun `mirror` to finish before importing from it. Run
+readers after the mirror writer completes. Generated repository files are owned
+by `mirror` and regenerated to match the source on subsequent runs.
+
+Mirrors retain physical archive locations, empty directories, observed file and
+checkout-directory permissions, module aliases, revision numbers, authors,
+timestamps, states, logs, commit IDs, symbols, default branches, descriptions,
+keyword modes, access lists, locks and strict-locking flags. Line provenance is
+used to reconstruct deterministic deltas, retaining annotation results and
+revision diff statistics. Custom states, branch aliases and non-1.x revision
+numbers are accepted by mirroring independently of Git import restrictions.
+
+Readable versioned `CVSROOT` archives are included with their complete histories.
+Their current checkout contents are also preserved under
+`.cvsgitrelay-mirror/administration/CVSROOT/`. The active local administration
+uses a fixed configuration and selected module definitions; source hooks and
+server settings are stored as data without being activated. Observed permissions
+and directory layout are retained in `.cvsgitrelay-mirror/tree.json`, including
+an availability flag for modes that CVS cannot expose. Inaccessible versioned
+administrative history causes an error instead of an incomplete success.
+
+Live revision bodies use exact `-kb` checkout bytes. Dead bodies and line origins
+are recovered with `rannotate -F`; raw annotations are cached as well. Annotation
+always adds a final newline, so an unterminated dead final line is recovered from
+an identical live line with the same origin when available. When that last bit
+is not exposed, the mirror retains the observable annotation and uses a trailing
+newline. No byte-for-byte copy of the original RCS encoding, unversioned server
+files or otherwise inaccessible metadata is claimed. Local CVS must reproduce
+all parsed metadata and annotations before the command reports success.
+
+The supported CVS text dialect and module-layout restrictions still apply.
+Use a new Git destination when switching an existing Git mirror to a local
+CVSROOT, because the source locator is part of its immutable identity.
+
 `source.submodules = "exclude"` is the default. Included CVS modules such as
 rxvt-unicode's libev and libecb contribute neither files nor revision histories
 to Git. Set it to `"include"` to import them into the same Git repository at
@@ -55,7 +143,7 @@ The dedicated destination must initially be new or an empty bare SHA-1 repositor
 New destinations use Git's reftable ref backend; existing empty bare
 destinations are converted during init. This backend is required so the import
 ref and ownership checkpoint share one atomic publication boundary.
-The exporter does not write to CVS.
+Remote CVS sources remain read-only.
 
 One CVS file revision creates one Git import commit, including dead revisions
 and revisions with identical content. Files use mode 100644 and `-kb` retrieval.

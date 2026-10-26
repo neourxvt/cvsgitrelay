@@ -24,6 +24,7 @@ import (
 )
 
 type cliOptions struct {
+	output                      string
 	repo                        string
 	cvsroot                     string
 	module                      string
@@ -70,6 +71,7 @@ func newRootCommand(setExit func(int)) *cobra.Command {
 	root.AddCommand(
 		newOperationCommand("status", "Show discovered, imported, and pending CVS revisions.", setExit),
 		newOperationCommand("verify", "Check the mirror against CVS and Git integrity rules.", setExit),
+		newOperationCommand("mirror", "Create or incrementally update a deterministic local CVSROOT.", setExit),
 	)
 	return root
 }
@@ -88,25 +90,33 @@ func newOperationCommand(operation, short string, setExit func(int)) *cobra.Comm
 	}
 
 	addOperationFlags(command, operation, options)
+	if operation == "mirror" {
+		command.Flags().StringVar(&options.output, "output", "", "required local CVSROOT directory to create or update (relative to the caller)")
+		_ = command.MarkFlagRequired("output")
+	}
 	return command
 }
 
 func addOperationFlags(command *cobra.Command, operation string, options *cliOptions) {
 	flags := command.Flags()
-	flags.StringVar(&options.repo, "repo", "", "override destination.repo (relative to the caller)")
+	if operation != "mirror" {
+		flags.StringVar(&options.repo, "repo", "", "override destination.repo (relative to the caller)")
+		flags.StringVar(&options.submodules, "submodules", "exclude", "override source.submodules: exclude or include")
+		flags.StringVar(&options.scope, "scope", "all", "override sync.scope: trunk or all")
+	}
 	flags.StringVar(&options.cvsroot, "cvsroot", "", "override source.cvsroot; use external authentication")
 	flags.StringVar(&options.module, "module", "", "override source.module")
-	flags.StringVar(&options.submodules, "submodules", "exclude", "override source.submodules: exclude or include")
 	flags.BoolVar(&options.requireConsecutiveRevisions, "require-consecutive-revisions", false, "override source.require_consecutive_revisions: reject numbering gaps")
-	flags.StringVar(&options.scope, "scope", "all", "override sync.scope: trunk or all")
 	flags.StringVar(&options.logFormat, "log-format", "text", "override logging.format: text or json")
 	flags.StringVar(&options.logLevel, "log-level", "info", "override logging.level: debug, info, warn or error")
 	flags.BoolVar(&options.errorStacks, "error-stacks", true, "override logging.error_stacks")
 	flags.DurationVar(&options.commandTimeout, "command-timeout", 5*time.Minute, "override process.command_timeout")
 	flags.IntVar(&options.maxOutput, "max-output", 256<<20, "override process.max_output")
 	flags.DurationVar(&options.progressInterval, "progress-interval", 15*time.Second, "override logging.progress_interval; zero disables progress")
-	if operation == "sync" {
+	if operation == "sync" || operation == "mirror" {
 		flags.IntVar(&options.connections, "connections", 2, "override sync.connections: maximum concurrent CVS revision fetches")
+	}
+	if operation == "sync" {
 		flags.StringVar(&options.failpoint, "failpoint", "", "override debug.failpoint: [kill:]STAGE[:ORDINAL]")
 	}
 	if operation == "verify" {
@@ -190,7 +200,12 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	if cfg.Logging.Format == "json" {
 		handler = slog.NewJSONHandler(os.Stderr, optionsLog)
 	}
-	log = slog.New(handler).With("run_id", hex.EncodeToString(id), "command", operation, "repo", cfg.Destination.Repo, "config", configPath)
+	log = slog.New(handler).With("run_id", hex.EncodeToString(id), "command", operation, "config", configPath)
+	if operation == "mirror" {
+		log = log.With("output", options.output)
+	} else {
+		log = log.With("repo", cfg.Destination.Repo)
+	}
 	log.Info("Starting " + operation + " with " + configPath)
 	commandTimeout, _ := time.ParseDuration(cfg.Process.CommandTimeout)
 	progressInterval, _ := time.ParseDuration(cfg.Logging.ProgressInterval)
@@ -211,21 +226,26 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	if ctx.Err() != nil {
 		return reportFailure(ctx.Err(), cfg.Logging.ErrorStacks)
 	}
-	var repository *relay.Repository
-	repository, err = relay.Open(ctx, runner, cfg.Destination.Repo)
-	if err == nil {
-		defer repository.Close()
-		log = log.With("source_id", repository.Config.SourceID)
-		runner.Log = log
-		if err = repository.ConfigureSource(cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.Submodules); err == nil {
-			repository.RequireConsecutiveRevisions = cfg.Source.RequireConsecutiveRevisions
-			switch operation {
-			case "sync":
-				summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint})
-			case "status":
-				summary, err = repository.Status(ctx, cfg.Sync.Scope)
-			case "verify":
-				summary, err = repository.Verify(ctx, relay.Options{Scope: cfg.Sync.Scope, Mode: cfg.Verify.Mode, ProgressInterval: progressInterval})
+	if operation == "mirror" {
+		// A CVS-to-CVS mirror does not open the configured Git destination.
+		summary, err = relay.Mirror(ctx, runner, cfg.Source.CVSRoot, cfg.Source.Module, options.output, cfg.Source.RequireConsecutiveRevisions, relay.Options{Connections: cfg.Sync.Connections, ProgressInterval: progressInterval})
+	} else {
+		var repository *relay.Repository
+		repository, err = relay.Open(ctx, runner, cfg.Destination.Repo)
+		if err == nil {
+			defer repository.Close()
+			log = log.With("source_id", repository.Config.SourceID)
+			runner.Log = log
+			if err = repository.ConfigureSource(cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.Submodules); err == nil {
+				repository.RequireConsecutiveRevisions = cfg.Source.RequireConsecutiveRevisions
+				switch operation {
+				case "sync":
+					summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint})
+				case "status":
+					summary, err = repository.Status(ctx, cfg.Sync.Scope)
+				case "verify":
+					summary, err = repository.Verify(ctx, relay.Options{Scope: cfg.Sync.Scope, Mode: cfg.Verify.Mode, ProgressInterval: progressInterval})
+				}
 			}
 		}
 	}

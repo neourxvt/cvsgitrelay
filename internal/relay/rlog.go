@@ -30,6 +30,11 @@ func parseRlog(data []byte, prefix string) (*Inventory, error) {
 }
 
 func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
+	return parseMappedRlogMode(data, mappings, false)
+}
+
+// Mirror discovery retains CVS fields independently of Git import restrictions.
+func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inventory, error) {
 	if bytes.IndexByte(data, 0) >= 0 {
 		return nil, diag.New("parse", "rlog", "NUL in metadata output", nil)
 	}
@@ -69,8 +74,10 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 				"hint", "file is outside the directories declared by the resolved CVS module")
 		}
 		p := strings.TrimSuffix(strings.TrimPrefix(rcs, mapping.RCSPrefix), ",v")
+		inAttic := false
 		parts := strings.Split(p, "/")
 		if len(parts) > 1 && parts[len(parts)-2] == "Attic" {
+			inAttic = true
 			parts = append(parts[:len(parts)-2], parts[len(parts)-1])
 			p = strings.Join(parts, "/")
 		}
@@ -87,7 +94,7 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 		if err := validatePath(p); err != nil {
 			return nil, err
 		}
-		f := &File{Path: p, SourcePath: sourcePath, Symbols: map[string]string{}}
+		f := &File{Path: p, SourcePath: sourcePath, Symbols: map[string]string{}, Locks: map[string]string{}, InAttic: inAttic}
 		pos++
 		take := func(prefix string) (string, bool) {
 			if pos >= len(lines) || !strings.HasPrefix(lines[pos], prefix) {
@@ -109,16 +116,28 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 				return nil, parseError(pos, "invalid default branch number")
 			}
 		}
-		if _, ok = take("locks:"); !ok {
+		locking, ok := take("locks:")
+		if !ok {
 			return nil, parseError(pos, "expected locks")
 		}
+		f.StrictLocks = locking == "strict"
 		for pos < len(lines) && strings.HasPrefix(lines[pos], "\t") {
+			owner, revision, found := strings.Cut(strings.TrimSpace(lines[pos]), ": ")
+			if _, err := numbers(revision); !found || err != nil || !rcsIdentifier(owner) {
+				return nil, parseError(pos, "invalid revision lock")
+			}
+			f.Locks[revision] = owner
 			pos++
 		}
 		if _, ok = take("access list:"); !ok {
 			return nil, parseError(pos, "expected access list")
 		}
 		for pos < len(lines) && strings.HasPrefix(lines[pos], "\t") {
+			owner := strings.TrimSpace(lines[pos])
+			if !rcsIdentifier(owner) {
+				return nil, parseError(pos, "invalid access-list entry")
+			}
+			f.Access = append(f.Access, owner)
 			pos++
 		}
 		if _, ok = take("symbolic names:"); !ok {
@@ -141,7 +160,7 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 			f.Symbols[name] = num
 			pos++
 		}
-		if _, ok = take("keyword substitution:"); !ok {
+		if f.KeywordMode, ok = take("keyword substitution:"); !ok {
 			return nil, parseError(pos, "expected keyword mode")
 		}
 		if pos >= len(lines) {
@@ -154,27 +173,42 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 		total, _ := strconv.Atoi(m[1])
 		selected, _ := strconv.Atoi(m[2])
 		pos++
-		if total < 1 || total != selected {
+		if (total < 1 && !mirror) || total != selected {
 			return nil, parseError(pos, "empty or filtered history; total and selected counts must match")
 		}
 		if _, ok = take("description:"); !ok {
 			return nil, parseError(pos, "expected description")
 		}
+		descriptionStart := pos
 		for pos < len(lines) && !recordBoundary(lines, pos) && lines[pos] != fileSeparator {
 			pos++
+		}
+		if pos > descriptionStart {
+			f.Description = []byte(strings.Join(lines[descriptionStart:pos], "\n") + "\n")
 		}
 		for pos < len(lines) && recordBoundary(lines, pos) {
 			pos++
 			number := strings.TrimPrefix(lines[pos], "revision ")
+			number, lockedBy, locked := strings.Cut(number, "\tlocked by: ")
+			locker := ""
+			if locked {
+				if !strings.HasSuffix(lockedBy, ";") {
+					return nil, parseError(pos, "invalid revision locker")
+				}
+				locker = strings.TrimSuffix(lockedBy, ";")
+				if !rcsIdentifier(locker) {
+					return nil, parseError(pos, "invalid revision locker")
+				}
+			}
 			pos++
-			r := &Revision{Number: number}
+			r := &Revision{Number: number, Locker: locker}
 			if _, err := numbers(number); err != nil {
 				return nil, parseError(pos, "invalid numeric revision")
 			}
 			if pos >= len(lines) {
 				return nil, parseError(pos, "missing revision metadata")
 			}
-			if err := parseMetadata(lines[pos], r); err != nil {
+			if err := parseMetadataMode(lines[pos], r, mirror); err != nil {
 				return nil, diag.New("parse", "rlog.metadata", "unsupported revision record", err, "line", pos+1, "path_hex", hexBytes(p), "revision", number)
 			}
 			pos++
@@ -183,6 +217,7 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 					if b = strings.TrimSpace(b); b == "" {
 						continue
 					}
+					r.Branches = append(r.Branches, b)
 					if _, ok := branchNumber(b); !ok {
 						return nil, parseError(pos, "invalid branches metadata")
 					}
@@ -215,7 +250,13 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 			files = append(files, f)
 		}
 	}
-	in, err := buildInventory(files)
+	var in *Inventory
+	var err error
+	if mirror {
+		in, err = buildMirrorInventory(files)
+	} else {
+		in, err = buildInventory(files)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -240,6 +281,10 @@ func fileBoundary(lines []string, i int) bool {
 }
 
 func parseMetadata(s string, r *Revision) error {
+	return parseMetadataMode(s, r, false)
+}
+
+func parseMetadataMode(s string, r *Revision, mirror bool) error {
 	parts := strings.Split(s, ";")
 	if len(parts) < 4 {
 		return fmt.Errorf("missing mandatory metadata fields")
@@ -251,6 +296,9 @@ func parseMetadata(s string, r *Revision) error {
 			continue
 		}
 		name, value, ok := strings.Cut(part, ": ")
+		if mirror && part == "state:" {
+			name, value, ok = "state", "", true
+		}
 		if !ok || seen[name] {
 			return fmt.Errorf("ambiguous metadata field")
 		}
@@ -268,11 +316,12 @@ func parseMetadata(s string, r *Revision) error {
 			}
 			r.Author = value
 		case "state":
-			if value != "Exp" && value != "dead" {
+			if (!mirror && value != "Exp" && value != "dead") || (mirror && value != "" && !rcsIdentifier(value)) {
 				return fmt.Errorf("unsupported revision state")
 			}
 			r.State = value
 		case "lines":
+			r.Lines = value
 			if !linesPattern.MatchString(part) {
 				return fmt.Errorf("invalid lines metadata")
 			}

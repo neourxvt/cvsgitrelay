@@ -2,6 +2,10 @@
 #   ./cycle.sh example.toml
 #   ./cycle.sh status example.toml
 #   ./cycle.sh verify example.toml
+#   ./cycle.sh mirror example.toml --output ./cvsroot-rxvt-unicode
+#   ./cycle.sh example.toml --cvsroot "$PWD/cvsroot-rxvt-unicode" --repo ./git-debug
+# Mirror incrementally copies all revision lines and included modules; it does not
+# use destination.repo, sync.scope or source.submodules.
 #
 # This file documents every configurable setting. Omitted optional settings use
 # the defaults shown below. Unknown keys and invalid values are rejected.
