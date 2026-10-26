@@ -37,14 +37,18 @@ type File struct {
 }
 
 type Inventory struct {
-	Layout    []ModuleMapping
-	Files     map[string]*File
-	Revisions map[string]*Revision
-	Ordered   []*Revision
-	Branches  map[string]map[string]string // destination -> path -> forkpoint
-	Trunk     int
-	Dead      int
-	Vendor    int
+	Layout            []ModuleMapping
+	Submodules        string
+	Excluded          []ModuleMapping
+	ExcludedFiles     int
+	ExcludedRevisions int
+	Files             map[string]*File
+	Revisions         map[string]*Revision
+	Ordered           []*Revision
+	Branches          map[string]map[string]string // destination -> path -> forkpoint
+	Trunk             int
+	Dead              int
+	Vendor            int
 }
 
 func key(path, number string) string { return path + "\x00" + number }

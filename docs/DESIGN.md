@@ -1,9 +1,30 @@
 # Implementation decisions
 
-The implementation uses Go 1.24+ and the standard library. Linux/POSIX process
+The implementation uses Go 1.24+ and a TOML parser library. Linux/POSIX process
 groups and advisory locking are explicit platform requirements. Git and CVS
 remain subprocess backends; no CVS protocol, RCS delta, or Git object writer is
 implemented inside the exporter.
+
+## Configuration and module selection
+
+Every command requires a user-managed TOML file; `example.toml` documents the
+complete settings schema. Explicit CLI flags override the file. Unknown keys,
+type errors and invalid values fail before repository access. Internal source
+identity remains in the private JSON file and is checked against TOML on open.
+
+Included CVS modules default to exclusion. Resolve and validate the complete
+module layout, then remove excluded files before constructing revision lines,
+branch membership, seeds or objects. Known excluded checkout destinations are
+also pruned from the main directory if their paths overlap. Ordinary nested
+directories are retained. Tip verification expands the independent CVS checkout
+and prunes those same destinations before comparing Git membership and bytes.
+
+The checkpoint pins both the selected layout and inclusion policy in the first
+source publication. Changing the policy after import requires a new destination;
+silently switching it could reinterpret published identities or leave unwanted
+dependency history reachable. Legacy imports without a recorded policy retain
+their original inclusion semantics. A destination with no data refs can choose
+either policy without rewriting its initial checkpoint.
 
 ## Publication and ref ownership
 
@@ -58,7 +79,7 @@ wrong file or concatenate multiple files.
 The supported subset is directory aliases (`-a`) and regular directory modules
 with optional destinations (`-d`). Resolve the actual `checkout -c` listing,
 reject cycles and ambiguous layouts, and require the same layout after the
-metadata scan. Pin that layout in the same Git transaction as the first import.
+metadata scan. Pin the selected layout in the same Git transaction as the first import.
 Existing literal mirrors have an implicit literal mapping and remain readable;
 their published histories cannot be reinterpreted as composite layouts.
 The import commit schema and existing source configuration remain compatible.

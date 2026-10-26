@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build from the checkout while resolving the mirror relative to the caller.
+# Keep source, destination and inclusion policy in the documented TOML file.
 project_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-repo=./git-rxvt-unicode
+
+# An optional first path selects another configuration; remaining args are
+# sync overrides. Without a path, use the documented rxvt-unicode example.
+config_file="$project_dir/example.toml"
+if [[ $# -gt 0 && "$1" != -* ]]; then
+    config_file=$1
+    shift
+fi
 
 "$project_dir/build.sh"
 
-# Initialize once; the explicit host/path separator is equivalent to the
-# advertised CVSROOT and is required by the exporter's locator parser.
-if [[ ! -f "$repo/cvsgitrelay.json" ]]; then
-    "$project_dir/cvsgitrelay" init \
-        --cvsroot ':pserver:anonymous@cvs.schmorp.de:/schmorpforge' \
-        --module rxvt-unicode \
-        --repo "$repo"
-fi
-
-# Forward optional sync flags, preserving quoting, signals and exit status.
-exec "$project_dir/cvsgitrelay" sync --repo "$repo" "$@"
+# Sync initializes a new destination; later flags override TOML settings.
+exec "$project_dir/cvsgitrelay" sync "$config_file" "$@"

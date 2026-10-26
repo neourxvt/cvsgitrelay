@@ -72,6 +72,8 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 func inventoryFingerprint(in *Inventory) string {
 	var b strings.Builder
 	b.WriteString(mappingFingerprint(in.Layout))
+	b.WriteString(mappingFingerprint(in.Excluded))
+	b.WriteString(in.Submodules)
 	b.WriteByte('\n')
 	paths := make([]string, 0, len(in.Files))
 	for path := range in.Files {
@@ -100,7 +102,7 @@ func inventoryFingerprint(in *Inventory) string {
 func (r *Repository) verifyTip(ctx context.Context, in *Inventory, scope string) error {
 	// CVS HEAD may follow a file's default vendor branch. Numeric major 1
 	// selects the 1.N trunk line independently of default-branch settings.
-	if err := r.compareCheckout(ctx, trunkRef, "1"); err != nil {
+	if err := r.compareCheckout(ctx, trunkRef, "1", in.Excluded); err != nil {
 		return err
 	}
 	if scope == "trunk" {
@@ -114,7 +116,7 @@ func (r *Repository) verifyTip(ctx context.Context, in *Inventory, scope string)
 		if err != nil {
 			return err
 		}
-		if err := r.compareCheckout(ctx, ref, string(name)); err != nil {
+		if err := r.compareCheckout(ctx, ref, string(name), in.Excluded); err != nil {
 			return err
 		}
 	}
@@ -123,7 +125,7 @@ func (r *Repository) verifyTip(ctx context.Context, in *Inventory, scope string)
 
 // An independent CVS working checkout is intentional here: computing the
 // expected tree with the importer's own branch model would hide model bugs.
-func (r *Repository) compareCheckout(ctx context.Context, ref, symbol string) error {
+func (r *Repository) compareCheckout(ctx context.Context, ref, symbol string, excluded []ModuleMapping) error {
 	dir, err := os.MkdirTemp("", "cvsgitrelay-verify-")
 	if err != nil {
 		return err
@@ -138,6 +140,18 @@ func (r *Repository) compareCheckout(ctx context.Context, ref, symbol string) er
 		if walkErr != nil {
 			return walkErr
 		}
+		rel, err := filepath.Rel(base, path)
+		if err != nil {
+			return err
+		}
+		// The independent checkout expands the full alias. Compare only the
+		// configured selection, pruning whole excluded directory subtrees.
+		if excludedPath(filepath.ToSlash(rel), excluded) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if entry.IsDir() {
 			if entry.Name() == "CVS" {
 				return filepath.SkipDir
@@ -146,10 +160,6 @@ func (r *Repository) compareCheckout(ctx context.Context, ref, symbol string) er
 		}
 		if !entry.Type().IsRegular() {
 			return diag.New("unsupported", "verify.checkout", "CVS produced a nonregular file", nil)
-		}
-		rel, err := filepath.Rel(base, path)
-		if err != nil {
-			return err
 		}
 		if err := validatePath(rel); err != nil {
 			return err

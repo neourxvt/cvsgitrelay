@@ -66,6 +66,16 @@ func (r *Repository) readCheckpoint(ctx context.Context, oid string) (string, Ma
 			return "", m, err
 		}
 	}
+	if m.Submodules != "" && m.Submodules != "exclude" && m.Submodules != "include" {
+		return "", m, diag.New("integrity", "checkpoint.read", "invalid submodule policy", nil, "commit", oid)
+	}
+	if m.Submodules == "exclude" {
+		for _, mapping := range m.Layout {
+			if mapping.Destination != "" {
+				return "", m, diag.New("integrity", "checkpoint.read", "excluded module appears in the published layout", nil, "commit", oid)
+			}
+		}
+	}
 	return parent, m, nil
 }
 
@@ -85,6 +95,11 @@ func (r *Repository) validateCheckpoints(ctx context.Context) error {
 			return err
 		}
 		if child != nil {
+			// Old checkpoints implicitly included all modules. A policy can be
+			// chosen at the first import, then must survive every publication.
+			if (m.Submodules != "" && child.Submodules != m.Submodules) || (m.Submodules == "" && len(m.Refs) > 0 && child.Submodules != "" && child.Submodules != "include") {
+				return diag.New("integrity", "checkpoint.walk", "published submodule policy was changed", nil, "commit", oid)
+			}
 			if (len(m.Layout) > 0 && !sameMappings(m.Layout, child.Layout)) || (len(m.Layout) == 0 && len(m.Refs) > 0 && len(child.Layout) > 0 && !sameMappings(child.Layout, literalMapping(r.Config.Module))) {
 				return diag.New("integrity", "checkpoint.walk", "published module layout was changed", nil, "commit", oid)
 			}

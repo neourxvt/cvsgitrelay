@@ -46,15 +46,50 @@ type Manifest struct {
 	Refs       map[string]string            `json:"refs"`
 	Members    map[string]map[string]string `json:"members"` // path keys are hex
 	Layout     []ModuleMapping              `json:"module_layout,omitempty"`
+	Submodules string                       `json:"submodules,omitempty"`
 }
 
 type Repository struct {
-	Path     string
-	Config   Config
-	Runner   *process.Runner
-	StateOID string
-	Manifest Manifest
-	lock     *os.File
+	Path       string
+	Config     Config
+	Runner     *process.Runner
+	StateOID   string
+	Manifest   Manifest
+	Submodules string
+	lock       *os.File
+}
+
+// ConfigureSource checks the requested source against the mirror's immutable
+// identity before any CVS access. Legacy imported mirrors included every module.
+func (r *Repository) ConfigureSource(root, module, submodules string) error {
+	if root != r.Config.CVSRoot || module != r.Config.Module {
+		return diag.New("config", "source.configure", "TOML source differs from the initialized mirror; use its original source or a new destination", nil)
+	}
+	if submodules != "exclude" && submodules != "include" {
+		return diag.New("config", "source.configure", "submodules must be exclude or include", nil)
+	}
+	if len(r.Manifest.Refs) > 0 && submodules != r.publishedSubmodules() {
+		return diag.New("config", "source.configure", "submodule policy differs from published history; use a new destination to change it", nil, "published_submodules", r.publishedSubmodules(), "requested_submodules", submodules)
+	}
+	r.Submodules = submodules
+	return nil
+}
+
+func (r *Repository) publishedSubmodules() string {
+	if r.Manifest.Submodules != "" {
+		return r.Manifest.Submodules
+	}
+	return "include"
+}
+
+func (r *Repository) submodulePolicy() string {
+	if r.Submodules != "" {
+		return r.Submodules
+	}
+	if len(r.Manifest.Refs) > 0 {
+		return r.publishedSubmodules()
+	}
+	return "exclude"
 }
 
 func (r *Repository) git(ctx context.Context, input []byte, env []string, args ...string) ([]byte, error) {

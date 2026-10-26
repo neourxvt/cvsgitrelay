@@ -22,22 +22,26 @@ type Options struct {
 }
 
 type Summary struct {
-	Operation        string   `json:"operation"`
-	Scope            string   `json:"scope"`
-	Files            int      `json:"files"`
-	Discovered       int      `json:"discovered"`
-	Imported         int      `json:"imported"`
-	Pending          int      `json:"pending"`
-	Trunk            int      `json:"trunk"`
-	Nontrunk         int      `json:"nontrunk"`
-	Vendor           int      `json:"vendor"`
-	Dead             int      `json:"dead"`
-	Published        int      `json:"published"`
-	Unimported       int      `json:"unimported"`
-	Refs             int      `json:"refs"`
-	NamedBranches    int      `json:"named_branches"`
-	ArchivalRefs     int      `json:"archival_refs"`
-	ScopeLimitations []string `json:"scope_limitations,omitempty"`
+	Operation         string   `json:"operation"`
+	Scope             string   `json:"scope"`
+	Submodules        string   `json:"submodules"`
+	ExcludedModules   []string `json:"excluded_modules,omitempty"`
+	ExcludedFiles     int      `json:"excluded_files"`
+	ExcludedRevisions int      `json:"excluded_revisions"`
+	Files             int      `json:"files"`
+	Discovered        int      `json:"discovered"`
+	Imported          int      `json:"imported"`
+	Pending           int      `json:"pending"`
+	Trunk             int      `json:"trunk"`
+	Nontrunk          int      `json:"nontrunk"`
+	Vendor            int      `json:"vendor"`
+	Dead              int      `json:"dead"`
+	Published         int      `json:"published"`
+	Unimported        int      `json:"unimported"`
+	Refs              int      `json:"refs"`
+	NamedBranches     int      `json:"named_branches"`
+	ArchivalRefs      int      `json:"archival_refs"`
+	ScopeLimitations  []string `json:"scope_limitations,omitempty"`
 }
 
 func (r *Repository) inspect(ctx context.Context) (*Inventory, map[string]*Imported, map[string][]*Imported, error) {
@@ -101,6 +105,12 @@ func mustPath(s string) string { p, _ := decodePath(s); return p }
 
 func summarize(op, scope string, in *Inventory, imports map[string]*Imported, refs map[string]string) Summary {
 	s := Summary{Operation: op, Scope: scope, Files: len(in.Files), Discovered: len(in.Revisions), Imported: len(imports), Trunk: in.Trunk, Nontrunk: len(in.Revisions) - in.Trunk, Vendor: in.Vendor, Dead: in.Dead, Refs: len(refs)}
+	s.Submodules = in.Submodules
+	s.ExcludedFiles, s.ExcludedRevisions = in.ExcludedFiles, in.ExcludedRevisions
+	for _, mapping := range in.Excluded {
+		s.ExcludedModules = append(s.ExcludedModules, mapping.Destination)
+	}
+	slices.Sort(s.ExcludedModules)
 	for ref := range refs {
 		if ref == trunkRef {
 			continue
@@ -156,8 +166,9 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	// Publish the resolved layout with the next source revision, never as an
 	// independent cursor. A failed or read-only scan cannot pin new state.
 	r.Manifest.Layout = slices.Clone(in.Layout)
+	r.Manifest.Submodules = in.Submodules
 	s := summarize("sync", opts.Scope, in, imports, r.Manifest.Refs)
-	r.Runner.Log.Info("sync inventory", "scope", opts.Scope, "files", s.Files, "discovered", s.Discovered, "imported", s.Imported, "pending", s.Pending, "nontrunk", s.Nontrunk, "unimported", s.Unimported)
+	r.Runner.Log.Info("sync inventory", "scope", opts.Scope, "submodules", s.Submodules, "excluded_modules", s.ExcludedModules, "excluded_files", s.ExcludedFiles, "excluded_revisions", s.ExcludedRevisions, "files", s.Files, "discovered", s.Discovered, "imported", s.Imported, "pending", s.Pending, "nontrunk", s.Nontrunk, "unimported", s.Unimported)
 	lastProgress := time.Now()
 	pending := slices.Clone(in.Ordered)
 	for len(pending) > 0 {

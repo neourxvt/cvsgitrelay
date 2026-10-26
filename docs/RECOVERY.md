@@ -1,12 +1,24 @@
 # Recovery and verification
 
-`verify --mode metadata` compares exact published identities and immutable
+Every command takes a TOML path, such as `sync FILE.toml`; keep it with the mirror's
+operational configuration. Runtime logging, limits and verification settings
+can change. CVSROOT and module must match the initialized source identity.
+The included-module policy becomes immutable with the first imported revision.
+Use a fresh destination to switch between `"exclude"` and `"include"`; editing
+TOML cannot remove already published dependency history. Mirrors imported before
+this setting existed require `source.submodules = "include"`. Mirrors initialized
+without any imported revisions may use either policy. See `example.toml` for
+all settings and overrides.
+
+`verify FILE.toml --mode metadata` compares exact published identities and immutable
 metadata with a new full CVS scan. It also checks each revision's Git tree,
 controlled commit headers, ancestry, and the ownership checkpoint chain.
 `--mode deep` additionally retrieves every live revision again and checks its
 recorded blob hash, then runs Git object integrity checks. `--mode tip` compares
 an independent CVS checkout with the Git tree and requires a stable metadata
 rescan. Supply `--scope trunk` deliberately for trunk-only verification.
+Each mode checks only the configured module selection. Intentionally excluded
+CVS modules appear as excluded counts, not missing revision identities.
 
 The state ref and the affected data ref advance in the same Git transaction.
 Every checkpoint is append-only and names exact expected data tips. A crash

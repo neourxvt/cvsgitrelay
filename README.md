@@ -8,23 +8,49 @@ Build with Go 1.24 or newer. Runtime dependencies are CVS and Git 2.48 or newer:
 
 ```sh
 go build ./cmd/cvsgitrelay
-./cvsgitrelay init --cvsroot "$CVSROOT" --module project --repo ./mirror.git
-./cvsgitrelay sync --repo ./mirror.git
-./cvsgitrelay status --repo ./mirror.git
-./cvsgitrelay verify --repo ./mirror.git --mode metadata
-./cvsgitrelay verify --repo ./mirror.git --mode deep
-./cvsgitrelay verify --repo ./mirror.git --mode tip
+cp example.toml mirror.toml
+# Edit source and destination in mirror.toml first.
+./cvsgitrelay init mirror.toml
+./cvsgitrelay sync mirror.toml
+./cvsgitrelay status mirror.toml
+./cvsgitrelay verify mirror.toml --mode metadata
+./cvsgitrelay verify mirror.toml --mode deep
+./cvsgitrelay verify mirror.toml --mode tip
 ```
+
+Every operation takes a required TOML path immediately after the command,
+followed by optional overrides. [example.toml](example.toml)
+documents every setting, default, allowed value and CLI override. Unknown keys
+and invalid types fail before repository access. Relative destination paths in
+TOML are resolved against the file's directory; explicit `--repo` overrides are
+relative to the caller. Other flags override TOML only when explicitly passed.
+`sync` initializes a new destination automatically, so explicit `init` is
+optional. `./sync-rxvt-unicode.sh` builds and syncs using `example.toml`; run
+`./sync-rxvt-unicode.sh your.toml` to select a different configuration.
+
+`source.submodules = "exclude"` is the default. Included CVS modules such as
+rxvt-unicode's libev and libecb contribute neither files nor revision histories
+to Git. Set it to `"include"` to import them into the same Git repository at
+their CVS checkout paths. This creates ordinary tracked directories, not Git
+submodule links. Normal subdirectories of the main CVS source remain included.
+Summaries report the policy, excluded module paths, and excluded file/revision
+counts. Discovery still enumerates the full alias to validate its layout.
+All verification modes use the same selection, including checkout comparisons.
+The policy is pinned with the first imported revision and cannot change after
+publication; use a new destination for a different selection. Older mirrors
+with imported history implicitly used `"include"` and require that setting.
 
 Use a literal repository directory module or a supported directory alias.
 Directory aliases may combine `-a` definitions with `-d` destinations under the
-requested checkout root. The resolved source/destination layout is pinned in
+requested checkout root. The selected source/destination layout is pinned in
 the Git checkpoint with the first imported revision; later mapping changes
 fail visibly. File selections, exclusions, checkout hooks and ampersand modules
 are unsupported. Configure authentication through CVS
-facilities; passwords embedded in CVSROOT are rejected. Source settings live in
-`mirror.git/cvsgitrelay.json`, mode 0600, and are pinned by a fingerprint in Git.
-The dedicated destination must initially be an empty bare SHA-1 repository.
+facilities; passwords embedded in CVSROOT are rejected. User settings live in
+the required TOML file. Immutable source identity also lives in
+`mirror.git/cvsgitrelay.json`, mode 0600, pinned by a fingerprint in Git; this
+internal file is not a replacement for TOML and should not be edited.
+The dedicated destination must initially be new or an empty bare SHA-1 repository.
 New destinations use Git's reftable ref backend; existing empty bare
 destinations are converted during init. This backend is required so the import
 ref and ownership checkpoint share one atomic publication boundary.
@@ -39,7 +65,7 @@ Trunk imports target `refs/heads/cvs/trunk`. Full metadata discovery occurs on
 every run. Missing history, revision gaps, metadata changes, unsupported source
 syntax and unexpected managed ref movement fail visibly.
 
-The default scope is `all`. Named CVS branches use
+The default scope is `all` within the configured module selection. Named CVS branches use
 `refs/heads/cvs/branches/<hex-name>`, initialized by an explicitly synthetic
 orphan seed containing each member file's forkpoint. Source revisions retain
 one canonical identity on their own revision line; seeds do not count as source

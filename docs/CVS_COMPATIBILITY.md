@@ -21,7 +21,7 @@ path remapping are rejected.
 
 `checkout -c` provides the definitions used to map physical RCS paths into Git
 checkout paths. The definitions are resolved before and after discovery; the
-layout is pinned in the Git checkpoint on the first import. Exact numeric
+selected layout is pinned in the Git checkpoint on the first import. Exact numeric
 retrieval uses each file's physical repository path, since a composite alias
 path can unexpectedly expand to several files even with `checkout -p`.
 
@@ -30,6 +30,13 @@ It defines `rxvt-unicode` as the main tree plus `libev` and `libecb`, mounted in
 the corresponding subdirectories. A local remote-protocol fixture demonstrates
 complete discovery, exact binary retrieval, independent trunk/vendor checkout
 verification, restart/no-op behavior, and rejection of later alias remapping.
+The required TOML file defaults `source.submodules` to `"exclude"`, omitting
+these included directories and their histories from Git. `"include"` enables
+the complete composite checkout in the same Git repository. All revision scopes
+and verification modes respect this choice. Full alias metadata is still parsed
+to validate framing, counts and paths; excluded histories do not enter ancestry
+or branch construction. Exclusion is a local selection policy, distinct from
+unsupported CVS module definition exclusion syntax.
 Only a terminal Attic component is removed. Newline, carriage return, tab and
 NUL in paths cannot be represented unambiguously by this rlog dialect and are
 rejected. Other POSIX path bytes are retained, with hex encoding in provenance.
@@ -49,5 +56,6 @@ Discovery also rejects nonempty stderr after exit zero: a warning about an
 inaccessible or skipped file cannot be treated as complete history. Remote
 transports must keep login banners and unrelated messages off this stream.
 
-The Go implementation replaces the proposal's C/Meson build with Go modules and
-the standard library. Installed CVS and Git remain the only runtime dependencies.
+The Go implementation replaces the proposal's C/Meson build with Go modules.
+The TOML parser is linked into the binary; installed CVS and Git remain the only
+runtime dependencies.

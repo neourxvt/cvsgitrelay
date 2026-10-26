@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -195,7 +196,10 @@ func TestCrashRecovery(t *testing.T) {
 			if err := Init(ctx, runner, dest, ":fork:"+root, "module"); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(bin, "sync", "--repo", dest, "--scope", tc.scope, "--failpoint", "kill:"+tc.stage+":"+tc.ordinal)
+			// The real CLI requires TOML even when fault settings use overrides.
+			config := filepath.Join(t.TempDir(), "mirror.toml")
+			writeFixture(t, config, []byte(fmt.Sprintf("[source]\ncvsroot = %q\nmodule = %q\n[destination]\nrepo = %q\n", ":fork:"+root, "module", dest)))
+			cmd := exec.Command(bin, "sync", config, "--scope", tc.scope, "--failpoint", "kill:"+tc.stage+":"+tc.ordinal)
 			out, err := cmd.CombinedOutput()
 			e, ok := err.(*exec.ExitError)
 			if !ok || !e.ProcessState.Sys().(syscall.WaitStatus).Signaled() || e.ProcessState.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {

@@ -17,7 +17,10 @@ const fileSeparator = "=========================================================
 var countsPattern = regexp.MustCompile(`^total revisions: ([0-9]+);[ \t]+selected revisions: ([0-9]+)$`)
 var linesPattern = regexp.MustCompile(`^lines: \+[0-9]+ -[0-9]+$`)
 
-type rlogMapping struct{ RCSPrefix, SourcePrefix, DestinationPrefix string }
+type rlogMapping struct {
+	RCSPrefix, SourcePrefix, DestinationPrefix string
+	Excluded                                   bool
+}
 
 // parseRlog recognizes the demonstrated GNU CVS grammar. A separator in a log
 // message is data unless it also impersonates a complete structural boundary.
@@ -32,6 +35,13 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 	}
 	lines := strings.Split(string(data), "\n")
 	var files []*File
+	var excluded []ModuleMapping
+	for _, mapping := range mappings {
+		if mapping.Excluded {
+			excluded = append(excluded, ModuleMapping{Source: mapping.SourcePrefix, Destination: mapping.DestinationPrefix})
+		}
+	}
+	excludedFiles, excludedRevisions := 0, 0
 	for pos := 0; pos < len(lines); {
 		if lines[pos] == "" {
 			pos++
@@ -195,9 +205,23 @@ func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 		if len(f.Revisions) != total {
 			return nil, diag.New("parse", "rlog.count", "revision count mismatch or ambiguous log boundary", nil, "path_hex", hexBytes(p), "line", start+1, "declared", total, "parsed", len(f.Revisions))
 		}
-		files = append(files, f)
+		// Validate framing and declared counts even for excluded modules, then
+		// omit their files before building revision ancestry or branch seeds.
+		// A module also owns its destination if the main source overlaps it.
+		if mapping.Excluded || excludedPath(p, excluded) {
+			excludedFiles++
+			excludedRevisions += len(f.Revisions)
+		} else {
+			files = append(files, f)
+		}
 	}
-	return buildInventory(files)
+	in, err := buildInventory(files)
+	if err != nil {
+		return nil, err
+	}
+	in.Excluded = excluded
+	in.ExcludedFiles, in.ExcludedRevisions = excludedFiles, excludedRevisions
+	return in, nil
 }
 
 func recordBoundary(lines []string, i int) bool {

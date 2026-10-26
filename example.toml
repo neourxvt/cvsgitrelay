@@ -1,0 +1,93 @@
+# Required for init, sync, status and verify:
+#   ./cycle.sh init example.toml
+#   ./cycle.sh sync example.toml
+#   ./cycle.sh status example.toml
+#   ./cycle.sh verify example.toml
+#
+# This file documents every configurable setting. Omitted optional settings use
+# the defaults shown below. Unknown keys and invalid values are rejected.
+# Existing CLI options override matching settings only when explicitly passed;
+# A TOML path is always required. Relative destination paths are relative to this
+# TOML file, while an explicit --repo override is relative to the caller.
+
+[source]
+# Required CVS locator. Use CVS authentication facilities for credentials;
+# passwords embedded in CVSROOT are rejected. Never commit private credentials.
+# CLI override: --cvsroot
+cvsroot = ":pserver:anonymous@cvs.schmorp.de:/schmorpforge"
+
+# Required CVS directory or supported composite module alias.
+# CLI override: --module
+module = "rxvt-unicode"
+
+# How to handle included CVS modules such as libev and libecb:
+# "exclude" (default): omit their directories AND revision histories from Git.
+# "include": import their files and histories into this same Git repository,
+#            at the subdirectories specified by the CVS module definitions.
+# These are CVS module inclusions, not Git submodule links or separate mirrors.
+# Ordinary nested source directories remain part of the main module.
+# The policy is pinned with the first import. To change it after revisions have
+# been published, use a new destination; published history is never rewritten.
+# CLI override: --submodules
+submodules = "exclude"
+
+[destination]
+# Required dedicated bare Git destination. Sync initializes a new destination
+# automatically; init is also available explicitly. Existing nonempty unmanaged
+# repositories are rejected. CLI override: --repo
+repo = "./git-rxvt-unicode"
+
+[sync]
+# "all" (default): every revision line in the configured module selection.
+# "trunk": numeric 1.N revisions only; report remaining selected revisions.
+# CLI override: --scope (also applies to status and verify)
+scope = "all"
+
+[verify]
+# "metadata" (default): compare identities, metadata, trees and ancestry.
+# "deep": also retrieve and hash every imported live revision and check objects.
+# "tip": compare Git tips with independent CVS working checkouts.
+# CLI override: --mode
+mode = "metadata"
+
+[logging]
+# "text" (default): readable progress and indented failure reports.
+# "json": structured records for machine collection. Diagnostics use stderr;
+# operation summaries use stdout. CLI override: --log-format
+format = "text"
+
+# "debug", "info" (default), "warn", or "error".
+# Debug adds command timings and individual revision publications.
+# CLI override: --log-level
+level = "info"
+
+# Include the originating stack and wrapping locations in failures.
+# CLI override: --error-stacks
+error_stacks = true
+
+# Minimum interval between sync progress reports. Go duration syntax, such as
+# "15s" or "1m"; "0s" disables periodic progress. CLI: --progress-interval
+progress_interval = "15s"
+
+[process]
+# Deadline for each CVS/Git subprocess. Must be a positive Go duration.
+# CLI override: --command-timeout
+command_timeout = "5m"
+
+# Maximum retained stdout bytes per command, including rlog and file contents.
+# A larger command fails visibly rather than returning truncated data.
+# Default: 256 MiB. CLI override: --max-output
+max_output = 268435456
+
+[debug]
+# Deliberate interruption for developer recovery checks. Empty disables it.
+# Syntax: "[kill:]STAGE[:ORDINAL]", for example "after-publish:2".
+# Stages: scan-start, scan-complete, fetch-start, fetch-complete, blob-written,
+# tree-written, commit-written, before-publish, after-publish, seed-written,
+# seed-published. ORDINAL defaults to 1. The kill: prefix sends SIGKILL;
+# otherwise the command returns exit 8. CLI override: --failpoint
+failpoint = ""
+
+# Fixed import policies are not configurable: -kb bytes, mode 100644, SHA-1 Git
+# objects, reftable refs, provenance version 1, and exporter-owned ref namespaces.
+# Source IDs and checkpoints are generated and maintained by cvsgitrelay.

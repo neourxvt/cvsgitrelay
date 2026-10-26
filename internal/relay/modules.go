@@ -160,6 +160,28 @@ func validateMappings(mappings []ModuleMapping) error {
 func sameMappings(a, b []ModuleMapping) bool       { return slices.Equal(a, b) }
 func literalMapping(module string) []ModuleMapping { return []ModuleMapping{{Source: module}} }
 
+// The root directory belongs to the requested module. Other destinations are
+// additional CVS modules, whose paths and histories are selected together.
+func selectModules(layout []ModuleMapping, policy string) (selected, excluded []ModuleMapping) {
+	for _, mapping := range layout {
+		if policy == "exclude" && mapping.Destination != "" {
+			excluded = append(excluded, mapping)
+		} else {
+			selected = append(selected, mapping)
+		}
+	}
+	return selected, excluded
+}
+
+func excludedPath(path string, excluded []ModuleMapping) bool {
+	for _, mapping := range excluded {
+		if path == mapping.Destination || strings.HasPrefix(path, mapping.Destination+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Repository) moduleLayout(ctx context.Context) ([]ModuleMapping, map[string][]string, error) {
 	out, err := r.cvs(ctx, "", "checkout", "-c")
 	if err != nil {
@@ -176,8 +198,13 @@ func (r *Repository) moduleLayout(ctx context.Context) ([]ModuleMapping, map[str
 // Legacy literal mirrors have an implicit identity mapping. A new layout may
 // be pinned only before imports, or when making that same mapping explicit.
 func (r *Repository) validateLayout(layout []ModuleMapping) error {
+	// A failed import may have prepared an in-memory layout without ever
+	// publishing it. Only data refs make that selection authoritative.
+	if len(r.Manifest.Refs) == 0 {
+		return nil
+	}
 	expected := r.Manifest.Layout
-	if len(expected) == 0 && len(r.Manifest.Refs) > 0 {
+	if len(expected) == 0 {
 		expected = literalMapping(r.Config.Module)
 	}
 	if len(expected) > 0 && !sameMappings(expected, layout) {

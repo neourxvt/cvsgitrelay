@@ -91,6 +91,10 @@ func TestCompositeModuleImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
+	// This fixture exercises the explicit inclusion mode for composite modules.
+	if err := r.ConfigureSource(":fork:"+root, "project", "include"); err != nil {
+		t.Fatal(err)
+	}
 	s, err := r.Sync(ctx, Options{Scope: "all"})
 	if err != nil {
 		t.Fatal(err)

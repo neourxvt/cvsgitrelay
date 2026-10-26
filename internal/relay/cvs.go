@@ -19,7 +19,9 @@ func (r *Repository) scan(ctx context.Context) (*Inventory, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := r.validateLayout(layout); err != nil {
+	policy := r.submodulePolicy()
+	selected, _ := selectModules(layout, policy)
+	if err := r.validateLayout(selected); err != nil {
 		return nil, err
 	}
 	out, err := r.cvs(ctx, "", "rlog", r.Config.Module)
@@ -29,7 +31,7 @@ func (r *Repository) scan(ctx context.Context) (*Inventory, error) {
 	dir, _ := sourceDirectory(r.Config.CVSRoot)
 	var mappings []rlogMapping
 	for _, mapping := range layout {
-		mappings = append(mappings, rlogMapping{RCSPrefix: dir + "/" + mapping.Source + "/", SourcePrefix: mapping.Source, DestinationPrefix: mapping.Destination})
+		mappings = append(mappings, rlogMapping{RCSPrefix: dir + "/" + mapping.Source + "/", SourcePrefix: mapping.Source, DestinationPrefix: mapping.Destination, Excluded: policy == "exclude" && mapping.Destination != ""})
 	}
 	in, err := parseMappedRlog(out, mappings)
 	if err != nil {
@@ -47,8 +49,9 @@ func (r *Repository) scan(ctx context.Context) (*Inventory, error) {
 	if !sameMappings(layout, after) {
 		return nil, diag.New("source", "modules.compare", "module definitions changed during discovery; retry when source is stable", nil, "before", layout, "after", after)
 	}
-	in.Layout = layout
-	r.Runner.Log.Debug("CVS module layout resolved", "module", r.Config.Module, "mapping", layout)
+	in.Layout = selected
+	in.Submodules = policy
+	r.Runner.Log.Debug("CVS module layout resolved", "module", r.Config.Module, "submodules", policy, "mapping", selected, "excluded_mapping", in.Excluded)
 	r.Runner.Log.Debug("source inventory validated", "files", len(in.Files), "revisions", len(in.Revisions), "trunk", in.Trunk, "nontrunk", len(in.Revisions)-in.Trunk, "dead", in.Dead, "vendor", in.Vendor)
 	return in, nil
 }
