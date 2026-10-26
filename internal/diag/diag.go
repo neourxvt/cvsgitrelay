@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
-	"runtime/debug"
 	"strings"
 )
 
@@ -90,15 +89,7 @@ func Failure(log *slog.Logger, err error, stacks bool) {
 	if e, ok := err.(*Error); ok {
 		message = e.Message
 	}
-	build := map[string]any{"go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
-	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, setting := range info.Settings {
-			if setting.Key == "vcs.revision" || setting.Key == "vcs.modified" {
-				build[setting.Key] = setting.Value
-			}
-		}
-	}
-	log.Error(message, "code", Code(err), "causes", Details(err, stacks), "runtime", build)
+	log.Error(message, "code", Code(err), "causes", Details(err, stacks))
 }
 
 // Redact removes the entire locator as well as a password embedded in a CVS

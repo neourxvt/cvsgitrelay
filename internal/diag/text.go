@@ -7,26 +7,47 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
 
-// textHandler keeps routine progress compact and gives failures a readable
-// layout. Clones share a lock so complete reports cannot interleave with logs.
+// textHandler renders routine logs as concise text and failures as readable
+// reports. Clones share a lock so complete reports cannot interleave.
 type textHandler struct {
 	base   slog.Handler
 	output io.Writer
 	mu     *sync.Mutex
 	attrs  []slog.Attr
 	groups []string
+	color  bool
 }
 
 func NewTextHandler(output io.Writer, options *slog.HandlerOptions) slog.Handler {
-	return &textHandler{base: slog.NewTextHandler(output, options), output: output, mu: &sync.Mutex{}}
+	return &textHandler{
+		base:   slog.NewTextHandler(output, options),
+		output: output,
+		mu:     &sync.Mutex{},
+		color:  colorEnabled(output),
+	}
+}
+
+func colorEnabled(output io.Writer) bool {
+	// Respect terminal detection and the user's opt-out before adding ANSI codes.
+	if os.Getenv("NO_COLOR") != "" || strings.EqualFold(os.Getenv("TERM"), "dumb") {
+		return false
+	}
+	file, ok := output.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func (h *textHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -65,18 +86,36 @@ func (h *textHandler) Handle(ctx context.Context, record slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if record.Level < slog.LevelError {
-		return h.base.Handle(ctx, record)
+		var output bytes.Buffer
+		writeHeader(&output, record, h.color)
+		output.WriteString(humanMessage(record.Message))
+		var attrs []slog.Attr
+		// Keep bound operation context out of routine text lines; failure reports
+		// and JSON logs retain it for diagnosis and collection.
+		record.Attrs(func(attr slog.Attr) bool {
+			attrs = append(attrs, groupAttr(h.groups, attr))
+			return true
+		})
+		if len(attrs) > 0 {
+			output.WriteString("  ")
+			for i, attr := range attrs {
+				if i > 0 {
+					output.WriteString("; ")
+				}
+				fmt.Fprintf(&output, "%s: %s", humanKey(attr.Key), humanValue(attr.Value.Resolve()))
+			}
+		}
+		output.WriteByte('\n')
+		_, err := h.output.Write(output.Bytes())
+		return err
 	}
 	var output bytes.Buffer
-	if !record.Time.IsZero() {
-		output.WriteString(record.Time.Format("2006-01-02 15:04:05.000Z07:00"))
-		output.WriteByte(' ')
-	}
-	fmt.Fprintf(&output, "%s: %s\n", record.Level, visible(record.Message))
+	writeHeader(&output, record, h.color)
+	output.WriteString(visible(record.Message))
+	output.WriteByte('\n')
 	attrs := slices.Clone(h.attrs)
 	record.Attrs(func(attr slog.Attr) bool { attrs = append(attrs, groupAttr(h.groups, attr)); return true })
 	var causes []map[string]any
-	var runtimeInfo any
 	for _, attr := range attrs {
 		value := attr.Value.Resolve()
 		if attr.Key == "causes" {
@@ -84,10 +123,6 @@ func (h *textHandler) Handle(ctx context.Context, record slog.Record) error {
 				causes = chain
 				continue
 			}
-		}
-		if attr.Key == "runtime" {
-			runtimeInfo = value.Any()
-			continue
 		}
 		writeValue(&output, attr.Key, slogValue(value), 2)
 	}
@@ -135,12 +170,95 @@ func (h *textHandler) Handle(ctx context.Context, record slog.Record) error {
 			}
 		}
 	}
-	if runtimeInfo != nil {
-		output.WriteByte('\n')
-		writeValue(&output, "Runtime", runtimeInfo, 2)
-	}
 	_, err := h.output.Write(output.Bytes())
 	return err
+}
+
+func writeHeader(output *bytes.Buffer, record slog.Record, color bool) {
+	if !record.Time.IsZero() {
+		output.WriteString(record.Time.Format("2006-01-02 15:04:05"))
+		output.WriteByte(' ')
+	}
+	label := fmt.Sprintf("%-5s", strings.ToUpper(record.Level.String()))
+	if color {
+		fmt.Fprintf(output, "\x1b[%sm%s\x1b[0m", levelColor(record.Level), label)
+	} else {
+		output.WriteString(label)
+	}
+	output.WriteByte(' ')
+}
+
+func levelColor(level slog.Level) string {
+	switch {
+	case level >= slog.LevelError:
+		return "31;1"
+	case level >= slog.LevelWarn:
+		return "33;1"
+	case level >= slog.LevelInfo:
+		return "36"
+	default:
+		return "2"
+	}
+}
+
+func humanMessage(message string) string {
+	message = visible(message)
+	if message == "" {
+		return message
+	}
+	first, size := utf8.DecodeRuneInString(message)
+	return string(unicode.ToUpper(first)) + message[size:]
+}
+
+func humanKey(key string) string { return strings.ReplaceAll(visible(key), "_", " ") }
+
+func humanValue(value slog.Value) string {
+	switch value.Kind() {
+	case slog.KindString:
+		return visible(value.String())
+	case slog.KindBool:
+		return strconv.FormatBool(value.Bool())
+	case slog.KindInt64:
+		return strconv.FormatInt(value.Int64(), 10)
+	case slog.KindUint64:
+		return strconv.FormatUint(value.Uint64(), 10)
+	case slog.KindFloat64:
+		return strconv.FormatFloat(value.Float64(), 'g', -1, 64)
+	case slog.KindDuration:
+		return value.Duration().String()
+	case slog.KindTime:
+		return value.Time().Format(time.RFC3339)
+	case slog.KindGroup:
+		var fields []string
+		for _, attr := range value.Group() {
+			fields = append(fields, humanKey(attr.Key)+": "+humanValue(attr.Value.Resolve()))
+		}
+		return strings.Join(fields, ", ")
+	default:
+		return humanAny(value.Any())
+	}
+}
+
+func humanAny(value any) string {
+	switch value := value.(type) {
+	case nil:
+		return "none"
+	case string:
+		return visible(value)
+	case []string:
+		if len(value) == 0 {
+			return "none"
+		}
+		parts := make([]string, len(value))
+		for i := range value {
+			parts[i] = visible(value[i])
+		}
+		return strings.Join(parts, ", ")
+	case error:
+		return visible(value.Error())
+	default:
+		return visible(fmt.Sprint(value))
+	}
 }
 
 func slogValue(value slog.Value) any {

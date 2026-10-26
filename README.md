@@ -10,23 +10,24 @@ Build with Go 1.24 or newer. Runtime dependencies are CVS and Git 2.48 or newer:
 go build ./cmd/cvsgitrelay
 cp example.toml mirror.toml
 # Edit source and destination in mirror.toml first.
-./cvsgitrelay init mirror.toml
-./cvsgitrelay sync mirror.toml
+./cvsgitrelay ./mirror.toml
 ./cvsgitrelay status mirror.toml
 ./cvsgitrelay verify mirror.toml --mode metadata
 ./cvsgitrelay verify mirror.toml --mode deep
 ./cvsgitrelay verify mirror.toml --mode tip
 ```
 
-Every operation takes a required TOML path immediately after the command,
-followed by optional overrides. [example.toml](example.toml)
+The default operation takes a required TOML path directly; `status` and
+`verify` take it after the subcommand. Optional overrides follow the path.
+[example.toml](example.toml)
 documents every setting, default, allowed value and CLI override. Unknown keys
 and invalid types fail before repository access. Relative destination paths in
 TOML are resolved against the file's directory; explicit `--repo` overrides are
 relative to the caller. Other flags override TOML only when explicitly passed.
-`sync` initializes a new destination automatically, so explicit `init` is
-optional. `./sync-rxvt-unicode.sh` builds and syncs using `example.toml`; run
-`./sync-rxvt-unicode.sh your.toml` to select a different configuration.
+The default command initializes a new destination and imports its CVS history;
+later runs import newly available history. `./sync-rxvt-unicode.sh` builds and
+syncs using `example.toml`; run `./sync-rxvt-unicode.sh your.toml` to select a
+different configuration.
 
 `source.submodules = "exclude"` is the default. Included CVS modules such as
 rxvt-unicode's libev and libecb contribute neither files nor revision histories
@@ -112,8 +113,11 @@ uses inventory, periodic progress, and summary counts. Failures are emitted once
 with a machine category, nested causes, stack frames, bounded subprocess stderr,
 exit status, command duration, byte counts and revision/ref/object context.
 Every report has a run ID. `--error-stacks=false` suppresses stack frames.
-Text failures use indented sections for context, causes, stack frames and runtime
-information. JSON retains nested fields for machine collection.
+Text logs are human-readable; severity colors are used only on an interactive
+terminal and are disabled by `NO_COLOR`. Ctrl-C gives active child processes
+time to stop, kills any remaining helpers, cleans temporary work, and exits
+without an error stack. Text failures use indented sections for context, causes,
+and stack frames. JSON retains nested fields for machine collection.
 Raw file contents, raw metadata scans, environment variables, and CVS locators
 are not logged. Review diagnostics before sharing them: paths and usernames can
 still be inferred from provenance and explicitly encoded source identities.

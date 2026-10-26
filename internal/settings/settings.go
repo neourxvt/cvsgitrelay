@@ -67,7 +67,7 @@ func defaults() Config {
 func Load(path string) (Config, error) {
 	c := defaults()
 	if path == "" {
-		return c, invalid("config", "a TOML path is required after the command; use cvsgitrelay sync example.toml")
+		return c, invalid("config", "a TOML path is required; use cvsgitrelay example.toml")
 	}
 	if !strings.EqualFold(filepath.Ext(path), ".toml") {
 		return c, invalid("config", "configuration filename must end in .toml")

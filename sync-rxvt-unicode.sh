@@ -14,5 +14,5 @@ fi
 
 "$project_dir/build.sh"
 
-# Sync initializes a new destination; later flags override TOML settings.
-exec "$project_dir/cvsgitrelay" sync "$config_file" "$@"
+# A direct invocation initializes a new destination; later flags override TOML settings.
+exec "$project_dir/cvsgitrelay" "$config_file" "$@"

@@ -76,11 +76,7 @@ func (r *Runner) run(ctx context.Context, dir string, env []string, input []byte
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
+		return signalProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
 	}
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Stdin = bytes.NewReader(input)
@@ -93,6 +89,11 @@ func (r *Runner) run(ctx context.Context, dir string, env []string, input []byte
 	}
 	start := time.Now()
 	err := cmd.Run()
+	if ctx.Err() != nil && cmd.Process != nil {
+		// WaitDelay only targets the direct child; kill the process group too so
+		// helpers that ignore SIGTERM cannot remain behind after cancellation.
+		_ = signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
+	}
 	fields := []any{"executable", name, "args", safe, "elapsed_ms", time.Since(start).Milliseconds(), "stdout_bytes", out.total, "stderr_bytes", stderr.total}
 	if cmd.ProcessState != nil {
 		fields = append(fields, "exit_code", cmd.ProcessState.ExitCode())
@@ -130,6 +131,14 @@ func (r *Runner) run(ctx context.Context, dir string, env []string, input []byte
 		r.Log.Debug("command completed", fields...)
 	}
 	return out.Bytes(), nil
+}
+
+func signalProcessGroup(pid int, sig syscall.Signal) error {
+	err := syscall.Kill(-pid, sig)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	return err
 }
 
 // Ignore inherited Git plumbing overrides and global configuration. Keep CVS

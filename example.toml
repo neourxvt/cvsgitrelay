@@ -1,6 +1,5 @@
-# Required for init, sync, status and verify:
-#   ./cycle.sh init example.toml
-#   ./cycle.sh sync example.toml
+# The default invocation syncs; status and verify are separate operations:
+#   ./cycle.sh example.toml
 #   ./cycle.sh status example.toml
 #   ./cycle.sh verify example.toml
 #
@@ -51,7 +50,8 @@ scope = "all"
 mode = "metadata"
 
 [logging]
-# "text" (default): readable progress and indented failure reports.
+# "text" (default): human-readable progress and indented failure reports;
+# terminal colors are used when stderr is interactive unless NO_COLOR is set.
 # "json": structured records for machine collection. Diagnostics use stderr;
 # operation summaries use stdout. CLI override: --log-format
 format = "text"

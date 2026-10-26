@@ -1,8 +1,10 @@
 # Recovery and verification
 
-Every command takes a TOML path, such as `sync FILE.toml`; keep it with the mirror's
-operational configuration. Runtime logging, limits and verification settings
-can change. CVSROOT and module must match the initialized source identity.
+The default invocation takes the TOML path directly, as in
+`cvsgitrelay FILE.toml`; `status` and `verify` take it after the subcommand.
+Keep the file with the mirror's operational configuration. Runtime logging,
+limits and verification settings can change. CVSROOT and module must match the
+initialized source identity.
 The included-module policy becomes immutable with the first imported revision.
 Use a fresh destination to switch between `"exclude"` and `"include"`; editing
 TOML cannot remove already published dependency history. Mirrors imported before
@@ -10,9 +12,10 @@ this setting existed require `source.submodules = "include"`. Mirrors initialize
 without any imported revisions may use either policy. See `example.toml` for
 all settings and overrides.
 
-`verify FILE.toml --mode metadata` compares exact published identities and immutable
-metadata with a new full CVS scan. It also checks each revision's Git tree,
-controlled commit headers, ancestry, and the ownership checkpoint chain.
+`cvsgitrelay verify FILE.toml --mode metadata` compares exact published
+identities and immutable metadata with a new full CVS scan. It also checks each
+revision's Git tree, controlled commit headers, ancestry, and the ownership
+checkpoint chain.
 `--mode deep` additionally retrieves every live revision again and checks its
 recorded blob hash, then runs Git object integrity checks. `--mode tip` compares
 an independent CVS checkout with the Git tree and requires a stable metadata
@@ -23,7 +26,7 @@ CVS modules appear as excluded counts, not missing revision identities.
 The state ref and the affected data ref advance in the same Git transaction.
 Every checkpoint is append-only and names exact expected data tips. A crash
 before publication leaves unreachable objects; a crash after publication leaves
-one recoverable revision identity. Rerun the same sync command. Do not remove
+one recoverable revision identity. Rerun the same command. Do not remove
 the state ref, edit source settings, reset branches, or manufacture replacement
 import commits. Restore damaged or removed refs from a complete backup.
 
@@ -54,9 +57,9 @@ are disposable indexes and never authoritative state. Remove them only while
 no exporter process is running. File locks are released by the kernel when a
 process exits; the lock file itself can remain permanently.
 
-For runtime reports, retain stderr with `--log-format json` and the stdout JSON
+For structured reports, retain stderr with `--log-format json` and the stdout JSON
 summary. Retry with `--log-level debug` for bounded command and revision context.
 Errors contain one full originating stack, wrapper locations, cause metadata,
-Go/build information, and a run ID. File content and raw source scans are omitted.
+and a run ID. File content and raw source scans are omitted.
 The default text renderer prints separate, indented sections and one stack frame
 at a time. JSON uses structured fields for collection by external tools.
