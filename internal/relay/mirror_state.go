@@ -50,11 +50,14 @@ type mirrorEntry struct {
 	Annotated  bool           `json:"annotated,omitempty"`
 }
 
-// Only this compact index stays resident. Full annotations and revision
-// metadata are decoded one record at a time from the existing cache format.
+// The resident index contains hashes and recovery hints, never file bodies.
+// Archived entries are recovered from verified local CVS history on demand.
 type mirrorCachedEntry struct {
-	Blob      string
-	Annotated bool
+	Blob           string
+	Annotated      bool
+	AnnotationHash string
+	Unterminated   bool
+	Archived       bool
 }
 
 // Byte slices use JSON base64 so supported non-UTF-8 paths and authors survive
@@ -76,6 +79,7 @@ type cvsMirror struct {
 	output              string
 	state               string
 	entries             map[string]mirrorCachedEntry
+	archives            map[string]mirrorArchive
 	summary             MirrorSummary
 	modes               map[string]fs.FileMode
 	directories         []string
@@ -222,12 +226,15 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 			return summary, diag.New("unsupported", "mirror", "administrative directories cannot be mirrored as source modules", nil)
 		}
 	}
-	for _, name := range []string{"revisions", "blobs"} {
+	for _, name := range []string{"revisions", "blobs", "archives", "pending"} {
 		if err = os.MkdirAll(filepath.Join(m.state, name), 0700); err != nil {
 			return summary, err
 		}
 	}
 	m.progress.stage("Loading retained mirror downloads", "revisions", len(before.Revisions))
+	if err = m.loadArchives(ctx, before); err != nil {
+		return summary, err
+	}
 	if err = m.loadEntries(before); err != nil {
 		return summary, err
 	}
@@ -336,6 +343,10 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	if err = m.publish(ctx, staging); err != nil {
 		return summary, err
 	}
+	// Commit archive proofs before removing any staging roots used by recovery.
+	if err = m.commitArchives(ctx); err != nil {
+		return summary, err
+	}
 	m.progress.stage("Normalizing local CVS mirror")
 	if err = m.canonicalize(before); err != nil {
 		return summary, err
@@ -411,16 +422,16 @@ func (m *cvsMirror) saveAnnotatedEntry(revision *Revision, data, annotation []by
 	entry := mirrorEntry{Revision: mirrorMetadata(revision), Annotation: annotation, Annotated: annotated}
 	if annotated || revision.State != "dead" {
 		entry.Blob = digest(data)
-		if err := mirrorWrite(filepath.Join(m.state, "blobs", entry.Blob), data); err != nil {
+		if err := mirrorWriteCompressed(filepath.Join(m.state, "blobs", entry.Blob+".gz"), data); err != nil {
 			return err
 		}
 	}
 	encoded, _ := json.Marshal(entry)
 	id := mirrorKey(revision)
-	if err := mirrorWrite(filepath.Join(m.state, "revisions", id+".json"), encoded); err != nil {
+	if err := mirrorWriteCompressed(filepath.Join(m.state, "revisions", id+".json"), encoded); err != nil {
 		return err
 	}
-	m.entries[id] = mirrorCachedEntry{Blob: entry.Blob, Annotated: entry.Annotated}
+	m.entries[id] = mirrorCachedEntry{Blob: entry.Blob, Annotated: entry.Annotated, AnnotationHash: digest(entry.Annotation), Unterminated: len(data) > 0 && data[len(data)-1] != '\n'}
 	return nil
 }
 
@@ -433,7 +444,7 @@ func (m *cvsMirror) loadEntries(inventory *Inventory) error {
 		if strings.HasPrefix(file.Name(), ".tmp-") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(m.state, "revisions", file.Name()))
+		data, err := mirrorReadCompressed(filepath.Join(m.state, "revisions", file.Name()))
 		if err != nil {
 			return err
 		}
@@ -449,7 +460,16 @@ func (m *cvsMirror) loadEntries(inventory *Inventory) error {
 		if (entry.Blob == "" && (current.State != "dead" || entry.Annotated)) || (entry.Blob != "" && (len(entry.Blob) != 64 || strings.Trim(entry.Blob, "0123456789abcdef") != "")) {
 			return diag.New("integrity", "mirror.cache", "invalid cached content digest", nil)
 		}
-		m.entries[mirrorKey(current)] = mirrorCachedEntry{Blob: entry.Blob, Annotated: entry.Annotated}
+		id := mirrorKey(current)
+		if archived, ok := m.entries[id]; ok && archived.Archived {
+			// Leftover downloads can survive checkpoint cleanup. They must still
+			// agree with the history already made durable in an archive.
+			if entry.Blob != archived.Blob || (entry.Annotated && digest(entry.Annotation) != archived.AnnotationHash) {
+				return diag.New("integrity", "mirror.cache", "retained download differs from verified archive", nil)
+			}
+			continue
+		}
+		m.entries[id] = mirrorCachedEntry{Blob: entry.Blob, Annotated: entry.Annotated, AnnotationHash: digest(entry.Annotation)}
 	}
 	return nil
 }
@@ -604,7 +624,9 @@ func (m *cvsMirror) publish(ctx context.Context, staging string) error {
 func (m *cvsMirror) canonicalize(inventory *Inventory) error {
 	usedBlobs := map[string]bool{}
 	for _, entry := range m.entries {
-		usedBlobs[entry.Blob] = true
+		if !entry.Archived {
+			usedBlobs[entry.Blob] = true
+		}
 	}
 	if err := filepath.WalkDir(m.state, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -613,7 +635,7 @@ func (m *cvsMirror) canonicalize(inventory *Inventory) error {
 		if filepath.Dir(path) == m.state && entry.IsDir() && strings.HasPrefix(entry.Name(), "work-") {
 			return filepath.SkipDir
 		}
-		if strings.HasPrefix(entry.Name(), ".tmp-") || (filepath.Dir(path) == filepath.Join(m.state, "blobs") && !usedBlobs[entry.Name()]) {
+		if strings.HasPrefix(entry.Name(), ".tmp-") || (filepath.Dir(path) == filepath.Join(m.state, "blobs") && !usedBlobs[strings.TrimSuffix(entry.Name(), ".gz")]) {
 			return os.Remove(path)
 		}
 		return nil
@@ -621,7 +643,8 @@ func (m *cvsMirror) canonicalize(inventory *Inventory) error {
 		return err
 	}
 	keep := map[string]bool{m.output: true, m.state: true, filepath.Join(m.output, "CVSROOT"): true,
-		filepath.Join(m.state, "revisions"): true, filepath.Join(m.state, "blobs"): true}
+		filepath.Join(m.state, "revisions"): true, filepath.Join(m.state, "blobs"): true,
+		filepath.Join(m.state, "archives"): true, filepath.Join(m.state, "pending"): true}
 	for _, mapping := range inventory.Layout {
 		for dir := filepath.Join(m.output, filepath.FromSlash(mapping.Source)); dir != m.output; dir = filepath.Dir(dir) {
 			keep[dir] = true

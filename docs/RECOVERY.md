@@ -63,3 +63,28 @@ Errors contain one full originating stack, wrapper locations, cause metadata,
 and a run ID. File content and raw source scans are omitted.
 The default text renderer prints separate, indented sections and one stack frame
 at a time. JSON uses structured fields for collection by external tools.
+
+The independent CVS-to-CVS command, `cvsgitrelay mirror FILE.toml --output DIR`,
+keeps historical bodies and line provenance in the published RCS archives.
+Compact compressed checkpoints in `.cvsgitrelay-mirror/archives/` record archive,
+revision metadata, content and annotation hashes, plus final-newline hints.
+Unchanged archives are checked and copied without replaying every revision.
+Changed archives reuse verified historical contents from local CVS history;
+only newly discovered revisions require downloads from the source.
+
+Existing mirrors with full `revisions/` and `blobs/` caches migrate during the
+next normal mirror run. Each archive is rebuilt and verified from those retained
+downloads before they are reclaimed. This first run can take longer than later
+polls, but does not download already cached revision bodies or annotations.
+Pending downloads are compressed and retained until a verified staging archive
+and its checkpoint are durable. Completed staging archives then replace those
+downloads as recovery data, limiting expanded scratch data to the active file.
+
+After an interrupted mirror run, rerun the same command and output directory.
+Do not delete `.cvsgitrelay-mirror/pending/` or `work-*` directories: they may be
+the only retained copy of downloaded history not yet published. Publication can
+be partially complete; pending proofs recover from their checked staging
+archives or matching published copies. Successful publication commits all
+archive proofs before removing pending checkpoints and temporary work. A local
+archive that no longer matches its checkpoint is rejected rather than silently
+replacing historical downloads. Keep the checkpoints with the CVS repository.

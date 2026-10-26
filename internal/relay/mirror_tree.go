@@ -105,6 +105,7 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory) error
 	}
 	// Files absent from a default checkout can still expose mode through an older
 	// live revision or a branch. No content is fabricated for that metadata probe.
+	historicalStarted := false
 	for _, file := range inventory.Files {
 		if _, known := m.modes[file.SourcePath]; known {
 			continue
@@ -119,7 +120,13 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory) error
 		if live == nil {
 			continue
 		}
-		m.progress.stage("Observing historical CVS file permissions", "path", file.SourcePath, "revision", live.Number)
+		// Start this phase once so its clock covers every historical probe.
+		if !historicalStarted {
+			m.progress.stage("Observing historical CVS file permissions")
+			historicalStarted = true
+		}
+		m.progress.update("path", file.SourcePath, "revision", live.Number)
+		m.source.Runner.Log.Debug("Observing historical CVS file permissions", "path", file.SourcePath, "revision", live.Number)
 		workspace, err := os.MkdirTemp(m.state, "work-mode-")
 		if err != nil {
 			return err

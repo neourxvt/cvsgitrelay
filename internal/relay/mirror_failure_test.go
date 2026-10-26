@@ -73,8 +73,8 @@ fi
 	}
 }
 
-// A final metadata failure must preserve the expensive downloads and generated
-// archives, including across another failed attempt, so a retry can reuse them.
+// A final metadata failure must preserve verified staging archives and their
+// checkpoints across another failed attempt, so retries need no new downloads.
 func TestMirrorRetainsWorkOnFinalComparisonFailure(t *testing.T) {
 	root, _, _ := fixture(t)
 	cvs, err := exec.LookPath("cvs")
@@ -131,7 +131,7 @@ fi
 		}
 		if attempt == 0 {
 			retained = map[string]string{}
-			for _, pattern := range []string{"work-*/module/*,v", "work-tree-*/tree/*", "blobs/*", "revisions/*"} {
+			for _, pattern := range []string{"work-*/module/*,v", "work-tree-*/tree/*", "pending/*"} {
 				paths, err := filepath.Glob(filepath.Join(output, mirrorStateDir, pattern))
 				if err != nil || len(paths) == 0 {
 					t.Fatalf("missing retained %s: %v", pattern, err)

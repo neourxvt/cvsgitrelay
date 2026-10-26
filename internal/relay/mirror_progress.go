@@ -50,10 +50,14 @@ func (p *mirrorProgress) close() {
 }
 
 // Phase changes are logged immediately even when periodic progress is disabled.
+// Repeated stage calls update details without restarting the phase clock.
 func (p *mirrorProgress) stage(message string, fields ...any) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.phase, p.started, p.fields = message, time.Now(), map[string]any{}
+	if p.phase != message {
+		p.phase, p.started = message, time.Now()
+	}
+	p.fields = map[string]any{}
 	for i := 0; i+1 < len(fields); i += 2 {
 		p.fields[fields[i].(string)] = fields[i+1]
 	}

@@ -3,7 +3,6 @@ package relay
 import (
 	"bytes"
 	"context"
-	"os"
 	"path/filepath"
 	"reflect"
 
@@ -12,10 +11,20 @@ import (
 
 // Read full cache records only while using a revision. The compact index also
 // lets us reject a record changed after the initial cache validation.
-func (m *cvsMirror) readEntry(revision *Revision) (mirrorEntry, error) {
+func (m *cvsMirror) readEntry(ctx context.Context, revision *Revision) (mirrorEntry, error) {
 	var entry mirrorEntry
 	id := mirrorKey(revision)
-	data, err := os.ReadFile(filepath.Join(m.state, "revisions", id+".json"))
+	if indexed := m.entries[id]; indexed.Archived {
+		raw, err := m.archiveRepository(revision.SourcePath).cvs(ctx, "", "rannotate", "-F", "-r", revision.Number, revision.SourcePath)
+		if err != nil {
+			return entry, err
+		}
+		if digest(raw) != indexed.AnnotationHash {
+			return entry, diag.New("integrity", "mirror.archive", "local annotation digest mismatch", nil)
+		}
+		return mirrorEntry{Revision: mirrorMetadata(revision), Blob: indexed.Blob, Annotated: true, Annotation: raw}, nil
+	}
+	data, err := mirrorReadCompressed(filepath.Join(m.state, "revisions", id+".json"))
 	if err != nil {
 		return entry, err
 	}
@@ -24,7 +33,7 @@ func (m *cvsMirror) readEntry(revision *Revision) (mirrorEntry, error) {
 	}
 	entry.Revision.Path = entry.Revision.SourcePath
 	indexed, exists := m.entries[id]
-	if !exists || entry.Blob != indexed.Blob || entry.Annotated != indexed.Annotated || !reflect.DeepEqual(entry.Revision, mirrorMetadata(revision)) {
+	if !exists || entry.Blob != indexed.Blob || entry.Annotated != indexed.Annotated || (entry.Annotated && digest(entry.Annotation) != indexed.AnnotationHash) || !reflect.DeepEqual(entry.Revision, mirrorMetadata(revision)) {
 		return entry, diag.New("integrity", "mirror.cache", "cached revision changed after validation", nil, "path_hex", hexBytes(revision.Path), "revision", revision.Number)
 	}
 	return entry, nil
@@ -32,9 +41,13 @@ func (m *cvsMirror) readEntry(revision *Revision) (mirrorEntry, error) {
 
 // Every body read is checked against its durable digest, including bodies
 // reloaded as branch forkpoints or during local archive verification.
-func (m *cvsMirror) readContent(revision *Revision) ([]byte, error) {
+func (m *cvsMirror) readContent(ctx context.Context, revision *Revision) ([]byte, error) {
 	entry := m.entries[mirrorKey(revision)]
-	data, err := os.ReadFile(filepath.Join(m.state, "blobs", entry.Blob))
+	if entry.Archived {
+		_, data, err := m.archivedRevision(ctx, revision)
+		return data, err
+	}
+	data, err := mirrorReadBlob(filepath.Join(m.state, "blobs", entry.Blob))
 	if err != nil {
 		return nil, err
 	}
@@ -46,8 +59,8 @@ func (m *cvsMirror) readContent(revision *Revision) ([]byte, error) {
 
 // Pairwise delta construction needs only these parsed origins and the exact
 // body. Nothing returned here is retained in the repository-wide cache index.
-func (m *cvsMirror) readRevision(revision *Revision) ([]byte, []string, error) {
-	entry, err := m.readEntry(revision)
+func (m *cvsMirror) readRevision(ctx context.Context, revision *Revision) ([]byte, []string, error) {
+	entry, err := m.readEntry(ctx, revision)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -55,7 +68,12 @@ func (m *cvsMirror) readRevision(revision *Revision) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err := m.readContent(revision)
+	var data []byte
+	if m.entries[mirrorKey(revision)].Archived {
+		data, err = m.annotationContent(revision, entry.Annotation)
+	} else {
+		data, err = m.readContent(ctx, revision)
+	}
 	return data, origins, err
 }
 
@@ -93,7 +111,7 @@ func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, co
 		entry, exists := m.entries[mirrorKey(rev)]
 		var raw []byte
 		if entry.Annotated {
-			cached, err := m.readEntry(rev)
+			cached, err := m.readEntry(ctx, rev)
 			if err != nil {
 				return err
 			}
@@ -111,7 +129,11 @@ func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, co
 		}
 		var data []byte
 		if exists && entry.Blob != "" {
-			data, err = m.readContent(rev)
+			if entry.Archived {
+				data, err = m.annotationContent(rev, raw)
+			} else {
+				data, err = m.readContent(ctx, rev)
+			}
 			if err != nil {
 				return err
 			}
@@ -156,7 +178,7 @@ func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, co
 		if dead.State != "dead" {
 			continue
 		}
-		entry, err := m.readEntry(dead)
+		entry, err := m.readEntry(ctx, dead)
 		if err != nil {
 			return err
 		}
@@ -164,7 +186,7 @@ func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, co
 		if err != nil {
 			return err
 		}
-		data, err := m.readContent(dead)
+		data, err := m.readContent(ctx, dead)
 		if err != nil {
 			return err
 		}
@@ -183,15 +205,15 @@ func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, co
 
 // Reread forkpoints as necessary rather than retaining every branch's base.
 // The head is full text; all other revisions require just one adjacent pair.
-func (m *cvsMirror) revisionDelta(revision, base *Revision) ([]byte, error) {
+func (m *cvsMirror) revisionDelta(ctx context.Context, revision, base *Revision) ([]byte, error) {
 	if base == nil {
-		return m.readContent(revision)
+		return m.readContent(ctx, revision)
 	}
-	data, origins, err := m.readRevision(revision)
+	data, origins, err := m.readRevision(ctx, revision)
 	if err != nil {
 		return nil, err
 	}
-	previous, previousOrigins, err := m.readRevision(base)
+	previous, previousOrigins, err := m.readRevision(ctx, base)
 	if err != nil {
 		return nil, err
 	}

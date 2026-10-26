@@ -39,6 +39,9 @@ func writeRCSString(out *bufio.Writer, data []byte) {
 }
 
 func (m *cvsMirror) writeFile(ctx context.Context, root string, file *File, connections int) error {
+	if reused, err := m.reuseArchive(ctx, root, file); reused || err != nil {
+		return err
+	}
 	// The head stores full text. Trunk deltas run backwards; branch deltas run
 	// forwards from the forkpoint. Bodies stay on disk between adjacent pairs.
 	revisions := slices.Clone(file.Revisions)
@@ -167,7 +170,7 @@ func (m *cvsMirror) writeFile(ctx context.Context, root string, file *File, conn
 			fmt.Fprintf(archive, "\n%s\nlog\n", revision.Number)
 			writeRCSString(archive, revision.Log)
 			archive.WriteString("\ntext\n")
-			data, err := m.revisionDelta(revision, byNumber[base[revision.Number]])
+			data, err := m.revisionDelta(ctx, revision, byNumber[base[revision.Number]])
 			if err != nil {
 				return err
 			}
@@ -190,7 +193,7 @@ func (m *cvsMirror) writeFile(ctx context.Context, root string, file *File, conn
 	m.progress.update("activity", "Verifying generated revisions")
 	for _, revision := range revisions {
 		m.progress.update("revision", revision.Number)
-		entry, err := m.readEntry(revision)
+		entry, err := m.readEntry(ctx, revision)
 		if err != nil {
 			return err
 		}
@@ -208,7 +211,7 @@ func (m *cvsMirror) writeFile(ctx context.Context, root string, file *File, conn
 		if err != nil {
 			return err
 		}
-		expected, err := m.readContent(revision)
+		expected, err := m.readContent(ctx, revision)
 		if err != nil {
 			return err
 		}
@@ -216,5 +219,5 @@ func (m *cvsMirror) writeFile(ctx context.Context, root string, file *File, conn
 			return diag.New("integrity", "mirror.compare", "generated CVS revision contents differ from the source", nil, "path_hex", hexBytes(file.Path), "revision", revision.Number)
 		}
 	}
-	return nil
+	return m.retainArchive(ctx, root, file)
 }
