@@ -37,7 +37,9 @@ func parseRlog(data []byte, prefix string) (*Inventory, error) {
 		}
 		rcs := strings.TrimPrefix(lines[pos], "RCS file: ")
 		if !strings.HasPrefix(rcs, prefix) || !strings.HasSuffix(rcs, ",v") {
-			return nil, parseError(pos, "RCS path does not match literal CVSROOT/module mapping; aliases and remapped roots are unsupported")
+			return nil, diag.New("parse", "rlog.parse", "RCS path does not match the configured module directory", nil,
+				"line", pos+1, "actual_rcs_path", rcs, "expected_rcs_prefix", prefix,
+				"hint", "aliases and remapped roots require explicit mapping support")
 		}
 		p := strings.TrimSuffix(strings.TrimPrefix(rcs, prefix), ",v")
 		parts := strings.Split(p, "/")

@@ -46,3 +46,5 @@ For runtime reports, retain stderr with `--log-format json` and the stdout JSON
 summary. Retry with `--log-level debug` for bounded command and revision context.
 Errors contain one full originating stack, wrapper locations, cause metadata,
 Go/build information, and a run ID. File content and raw source scans are omitted.
+The default text renderer prints separate, indented sections and one stack frame
+at a time. JSON uses structured fields for collection by external tools.

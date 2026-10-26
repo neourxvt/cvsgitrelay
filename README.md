@@ -81,6 +81,8 @@ uses inventory, periodic progress, and summary counts. Failures are emitted once
 with a machine category, nested causes, stack frames, bounded subprocess stderr,
 exit status, command duration, byte counts and revision/ref/object context.
 Every report has a run ID. `--error-stacks=false` suppresses stack frames.
+Text failures use indented sections for context, causes, stack frames and runtime
+information. JSON retains nested fields for machine collection.
 Raw file contents, raw metadata scans, environment variables, and CVS locators
 are not logged. Review diagnostics before sharing them: paths and usernames can
 still be inferred from provenance and explicitly encoded source identities.

@@ -48,8 +48,8 @@ func Code(err error) string {
 	return "internal"
 }
 
-// Details remains JSON serializable; text logging renders the same cause and
-// frame data on one line so a failed revision is easy to collect and forward.
+// Details retains structured causes for JSON collection and the readable text
+// renderer. The text layout does not alter the machine-readable error schema.
 func Details(err error, stacks bool) []map[string]any {
 	var chain []map[string]any
 	var deepestStack []string

@@ -52,7 +52,7 @@ func run(args []string) (exit int) {
 		return 2
 	}
 	options := &slog.HandlerOptions{Level: verbosity}
-	var handler slog.Handler = slog.NewTextHandler(os.Stderr, options)
+	var handler slog.Handler = diag.NewTextHandler(os.Stderr, options)
 	if *format == "json" {
 		handler = slog.NewJSONHandler(os.Stderr, options)
 	}
