@@ -96,6 +96,21 @@ func (r *Runner) Run(ctx context.Context, dir string, env []string, input []byte
 			code, message = "limit", "command output exceeds --max-output; raise the limit after checking source size"
 		}
 		fields = append(fields, "stderr_tail", diag.Redact(stderr.String(), r.Root), "stderr_truncated", stderr.total > stderr.limit, "stdout_limit", out.limit)
+		// Some Git diagnostics, particularly fsck object errors, are emitted
+		// on stdout. Only admit known diagnostic commands, never CVS bytes or
+		// cat-file/show output containing source content and log messages.
+		if name == "git" {
+			for _, arg := range args {
+				if arg == "fsck" || arg == "update-ref" {
+					data := out.Bytes()
+					if len(data) > 8192 {
+						data = data[len(data)-8192:]
+					}
+					fields = append(fields, "stdout_diagnostic", diag.Redact(string(data), r.Root))
+					break
+				}
+			}
+		}
 		return nil, diag.New(code, "process.run", message, err, fields...)
 	}
 	if r.Log != nil {

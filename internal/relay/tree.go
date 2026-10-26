@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"cvsgitrelay/internal/diag"
@@ -13,6 +14,14 @@ import (
 // changeTree never uses the destination's default index or a Git working tree.
 // NUL framing preserves spaces and all other accepted POSIX filename bytes.
 func (r *Repository) changeTree(ctx context.Context, parent, path, blob string) (string, error) {
+	return r.writeTree(ctx, parent, map[string]string{path: blob})
+}
+
+func (r *Repository) seedTree(ctx context.Context, entries map[string]string) (string, error) {
+	return r.writeTree(ctx, "", entries)
+}
+
+func (r *Repository) writeTree(ctx context.Context, parent string, entries map[string]string) (string, error) {
 	dir, err := os.MkdirTemp(r.Path, "cvsgitrelay-tmp-")
 	if err != nil {
 		return "", err
@@ -26,14 +35,33 @@ func (r *Repository) changeTree(ctx context.Context, parent, path, blob string) 
 	if _, err := r.git(ctx, nil, env, args...); err != nil {
 		return "", err
 	}
-	record := "0 " + zeroOID + "\t" + path + "\x00"
-	if blob != "-" {
-		record = "100644 " + blob + "\t" + path + "\x00"
+	paths := make([]string, 0, len(entries))
+	for path := range entries {
+		paths = append(paths, path)
 	}
-	if _, err := r.git(ctx, []byte(record), env, "update-index", "-z", "--index-info"); err != nil {
+	slices.Sort(paths)
+	var records strings.Builder
+	for _, path := range paths {
+		blob := entries[path]
+		if blob == "-" {
+			records.WriteString("0 " + zeroOID + "\t" + path + "\x00")
+		} else {
+			records.WriteString("100644 " + blob + "\t" + path + "\x00")
+		}
+	}
+	if _, err := r.git(ctx, []byte(records.String()), env, "update-index", "-z", "--index-info"); err != nil {
 		return "", err
 	}
-	return r.oid(ctx, nil, env, "write-tree")
+	tree, err := r.oid(ctx, nil, env, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	// Git can resolve its built-in empty tree without a loose object. Store
+	// it explicitly so an empty seed/deletion tree survives fsck and transfer.
+	if tree == "4b825dc642cb6eb9a060e54bf8d69288fbee4904" {
+		return r.oid(ctx, nil, nil, "hash-object", "-t", "tree", "-w", "--stdin")
+	}
+	return tree, nil
 }
 
 type treeEntry struct {

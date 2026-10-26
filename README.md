@@ -9,8 +9,11 @@ Build with Go 1.24 or newer:
 ```sh
 go build ./cmd/cvsgitrelay
 ./cvsgitrelay init --cvsroot "$CVSROOT" --module project --repo ./mirror.git
-./cvsgitrelay sync --repo ./mirror.git --scope trunk
-./cvsgitrelay status --repo ./mirror.git --scope trunk
+./cvsgitrelay sync --repo ./mirror.git
+./cvsgitrelay status --repo ./mirror.git
+./cvsgitrelay verify --repo ./mirror.git --mode metadata
+./cvsgitrelay verify --repo ./mirror.git --mode deep
+./cvsgitrelay verify --repo ./mirror.git --mode tip
 ```
 
 Use a literal repository directory module. Configure authentication through CVS
@@ -27,6 +30,18 @@ CVS timestamps use UTC. No changeset grouping or historical Git tags are inferre
 Trunk imports target `refs/heads/cvs/trunk`. Full metadata discovery occurs on
 every run. Missing history, revision gaps, metadata changes, unsupported source
 syntax and unexpected managed ref movement fail visibly.
+
+The default scope is `all`. Named CVS branches use
+`refs/heads/cvs/branches/<hex-name>`, initialized by an explicitly synthetic
+orphan seed containing each member file's forkpoint. Source revisions retain
+one canonical identity on their own revision line; seeds do not count as source
+revisions. Vendor lines are included. Unnamed revision lines use per-file refs
+under `refs/cvsgitrelay/unmapped/<hex-path>/<numeric-line>`; these are revision
+archives, not complete project checkouts. Summaries report this limitation.
+`--scope trunk` deliberately imports/verifies only numeric `1.N` history and
+reports all remaining identities. Static CVS tags and merge reconstruction are
+outside scope. Multiple symbols owning the same revision line are rejected
+until branch alias semantics have an explicit policy.
 
 `refs/cvsgitrelay/state` contains an append-only Git checkpoint manifest. An
 `update-ref --stdin` transaction advances both the import branch and this
@@ -67,5 +82,6 @@ integrity; 6 ref conflict or writer contention; 7 subprocess/deadline/output
 limit; 70 internal error; 74 local I/O. Only successful operations exit zero.
 
 See [CVS compatibility](docs/CVS_COMPATIBILITY.md) and [the proposal](PROPOSAL.md).
+See [recovery and verification](docs/RECOVERY.md) for interruption handling.
 The capability and integration fixtures use disposable local repositories and
 need installed `cvs` and `git`; run them explicitly with `go test ./...`.

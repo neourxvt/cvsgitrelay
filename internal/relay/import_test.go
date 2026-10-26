@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"cvsgitrelay/internal/diag"
 	"cvsgitrelay/internal/process"
 )
 
@@ -48,8 +49,8 @@ func TestTrunkImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, err := r.Sync(ctx, Options{Scope: "all"}); err == nil {
-		t.Fatal("full import must refuse nontrunk history before branch support")
+	if _, err := r.Verify(ctx, Options{Scope: "all", Mode: "metadata"}); err == nil {
+		t.Fatal("full verification must reject missing history")
 	}
 	s, err := r.Sync(ctx, Options{Scope: "trunk"})
 	if err != nil {
@@ -107,6 +108,68 @@ func TestTrunkImport(t *testing.T) {
 	}
 }
 
+func TestAllRevisionLines(t *testing.T) {
+	root, work, _ := fixture(t)
+	ctx := context.Background()
+	runner := &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 16 << 20}
+	dest := filepath.Join(t.TempDir(), "mirror.git")
+	if err := Init(ctx, runner, dest, ":fork:"+root, "module"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(ctx, runner, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	s, err := r.Sync(ctx, Options{Scope: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Published != 9 || s.Unimported != 0 {
+		t.Fatalf("unexpected full summary %+v", s)
+	}
+	for _, mode := range []string{"metadata", "deep", "tip"} {
+		if _, err := r.Verify(ctx, Options{Scope: "all", Mode: mode}); err != nil {
+			t.Fatalf("verify %s: %v", mode, err)
+		}
+	}
+	state := r.StateOID
+	s, err = r.Sync(ctx, Options{Scope: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Published != 0 || r.StateOID != state {
+		t.Fatal("full no-op rewrote history")
+	}
+	// Removing a previously imported symbol would move its canonical revision
+	// identities to unnamed archives and must fail rather than duplicate them.
+	fixtureCVS(t, root, work, "tag", "-B", "-d", "feature")
+	if _, err := r.Status(ctx, "all"); err == nil {
+		t.Fatal("moved branch assignment was accepted")
+	}
+	// With no prior branch assignment, the same unnamed lines are archived
+	// independently instead of being guessed into one project branch.
+	unnamedDest := filepath.Join(t.TempDir(), "unnamed.git")
+	if err := Init(ctx, runner, unnamedDest, ":fork:"+root, "module"); err != nil {
+		t.Fatal(err)
+	}
+	u, err := Open(ctx, runner, unnamedDest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u.Close()
+	s, err = u.Sync(ctx, Options{Scope: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Imported != 9 || s.ArchivalRefs != 2 || s.Unimported != 0 {
+		t.Fatalf("unnamed revisions not archived: %+v", s)
+	}
+	if _, err := u.Verify(ctx, Options{Scope: "all", Mode: "deep"}); err != nil {
+		t.Fatalf("%v\n%+v", err, diag.Details(err, false))
+	}
+}
+
 func TestCrashRecovery(t *testing.T) {
 	root, _, _ := fixture(t)
 	bin := filepath.Join(t.TempDir(), "cvsgitrelay")
@@ -115,36 +178,46 @@ func TestCrashRecovery(t *testing.T) {
 		t.Fatalf("build CLI: %v\n%s", err, out)
 	}
 	ctx := context.Background()
+	type crashCase struct{ stage, scope, ordinal string }
+	var cases []crashCase
 	for _, stage := range []string{"scan-start", "scan-complete", "fetch-start", "fetch-complete", "blob-written", "tree-written", "commit-written", "before-publish", "after-publish"} {
-		t.Run(stage, func(t *testing.T) {
+		ordinal := "2"
+		if strings.HasPrefix(stage, "scan-") {
+			ordinal = "1"
+		}
+		cases = append(cases, crashCase{stage, "trunk", ordinal})
+	}
+	cases = append(cases, crashCase{"seed-written", "all", "1"}, crashCase{"seed-published", "all", "1"}, crashCase{"after-publish", "all", "9"})
+	for _, tc := range cases {
+		t.Run(tc.scope+"/"+tc.stage, func(t *testing.T) {
 			runner := &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 16 << 20}
 			dest := filepath.Join(t.TempDir(), "mirror.git")
 			if err := Init(ctx, runner, dest, ":fork:"+root, "module"); err != nil {
 				t.Fatal(err)
 			}
-			ordinal := "2"
-			if strings.HasPrefix(stage, "scan-") {
-				ordinal = "1"
-			}
-			cmd := exec.Command(bin, "sync", "--repo", dest, "--scope", "trunk", "--failpoint", "kill:"+stage+":"+ordinal)
+			cmd := exec.Command(bin, "sync", "--repo", dest, "--scope", tc.scope, "--failpoint", "kill:"+tc.stage+":"+tc.ordinal)
 			out, err := cmd.CombinedOutput()
 			e, ok := err.(*exec.ExitError)
 			if !ok || !e.ProcessState.Sys().(syscall.WaitStatus).Signaled() || e.ProcessState.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
-				t.Fatalf("expected SIGKILL at %s: %v\n%s", stage, err, out)
+				t.Fatalf("expected SIGKILL at %s: %v\n%s", tc.stage, err, out)
 			}
 			r, err := Open(ctx, runner, dest)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer r.Close()
-			if _, err := r.Sync(ctx, Options{Scope: "trunk"}); err != nil {
+			if _, err := r.Sync(ctx, Options{Scope: tc.scope}); err != nil {
 				t.Fatal(err)
 			}
-			s, err := r.Verify(ctx, Options{Scope: "trunk", Mode: "deep"})
+			s, err := r.Verify(ctx, Options{Scope: tc.scope, Mode: "deep"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if s.Imported != 6 || s.Pending != 0 {
+			expected := 6
+			if tc.scope == "all" {
+				expected = 9
+			}
+			if s.Imported != expected || s.Pending != 0 {
 				t.Fatalf("incomplete restart: %+v", s)
 			}
 		})

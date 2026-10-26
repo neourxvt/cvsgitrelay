@@ -15,7 +15,7 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 	if err != nil {
 		return Summary{}, err
 	}
-	s := summarize("verify", opts.Scope, in, imports, len(r.Manifest.Refs))
+	s := summarize("verify", opts.Scope, in, imports, r.Manifest.Refs)
 	if s.Pending != 0 {
 		return s, diag.New("integrity", "verify.metadata", "requested scope has missing revision identities; run sync", nil, "scope", opts.Scope, "pending", s.Pending, "unimported", s.Unimported)
 	}

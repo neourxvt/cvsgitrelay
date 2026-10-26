@@ -30,11 +30,12 @@ Configuration is synced when initialized; no separate mutable cursor is used.
 Explicit developer interruption points are available through
 `--failpoint [kill:]STAGE[:ORDINAL]`. Stages are `scan-start`, `scan-complete`,
 `fetch-start`, `fetch-complete`, `blob-written`, `tree-written`, `commit-written`,
-`before-publish`, and `after-publish`. Without `kill:` the command returns an
+`before-publish`, `after-publish`, `seed-written`, and `seed-published`.
+Without `kill:` the command returns an
 intentional failure (exit 8). With `kill:` it terminates itself with SIGKILL.
 The ordinal defaults to one. Never configure these in scheduled production runs.
 The automated crash fixture kills the real CLI at each boundary, reruns sync,
-and deep verifies the recovered trunk archive.
+and deep verifies the recovered archive, including interrupted branch seeds.
 
 Temporary directories named `cvsgitrelay-tmp-*` may remain after SIGKILL. They
 are disposable indexes and never authoritative state. Remove them only while

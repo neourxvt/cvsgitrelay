@@ -22,19 +22,22 @@ type Options struct {
 }
 
 type Summary struct {
-	Operation  string `json:"operation"`
-	Scope      string `json:"scope"`
-	Files      int    `json:"files"`
-	Discovered int    `json:"discovered"`
-	Imported   int    `json:"imported"`
-	Pending    int    `json:"pending"`
-	Trunk      int    `json:"trunk"`
-	Nontrunk   int    `json:"nontrunk"`
-	Vendor     int    `json:"vendor"`
-	Dead       int    `json:"dead"`
-	Published  int    `json:"published"`
-	Unimported int    `json:"unimported"`
-	Refs       int    `json:"refs"`
+	Operation        string   `json:"operation"`
+	Scope            string   `json:"scope"`
+	Files            int      `json:"files"`
+	Discovered       int      `json:"discovered"`
+	Imported         int      `json:"imported"`
+	Pending          int      `json:"pending"`
+	Trunk            int      `json:"trunk"`
+	Nontrunk         int      `json:"nontrunk"`
+	Vendor           int      `json:"vendor"`
+	Dead             int      `json:"dead"`
+	Published        int      `json:"published"`
+	Unimported       int      `json:"unimported"`
+	Refs             int      `json:"refs"`
+	NamedBranches    int      `json:"named_branches"`
+	ArchivalRefs     int      `json:"archival_refs"`
+	ScopeLimitations []string `json:"scope_limitations,omitempty"`
 }
 
 func (r *Repository) inspect(ctx context.Context) (*Inventory, map[string]*Imported, map[string][]*Imported, error) {
@@ -87,13 +90,35 @@ func (r *Repository) validatePublished(ctx context.Context, in *Inventory, impor
 			last[rev.Path] = rev.Number
 		}
 	}
-	return nil
+	return r.validateBranches(ctx, in, imports, chains)
 }
 
 func mustPath(s string) string { p, _ := decodePath(s); return p }
 
-func summarize(op, scope string, in *Inventory, imports map[string]*Imported, refs int) Summary {
-	s := Summary{Operation: op, Scope: scope, Files: len(in.Files), Discovered: len(in.Revisions), Imported: len(imports), Trunk: in.Trunk, Nontrunk: len(in.Revisions) - in.Trunk, Vendor: in.Vendor, Dead: in.Dead, Refs: refs}
+func summarize(op, scope string, in *Inventory, imports map[string]*Imported, refs map[string]string) Summary {
+	s := Summary{Operation: op, Scope: scope, Files: len(in.Files), Discovered: len(in.Revisions), Imported: len(imports), Trunk: in.Trunk, Nontrunk: len(in.Revisions) - in.Trunk, Vendor: in.Vendor, Dead: in.Dead, Refs: len(refs)}
+	for ref := range refs {
+		if ref == trunkRef {
+			continue
+		}
+		if branchKind(ref) == "archive" {
+			s.ArchivalRefs++
+		} else {
+			s.NamedBranches++
+		}
+	}
+	if s.ArchivalRefs > 0 {
+		s.ScopeLimitations = append(s.ScopeLimitations, "unnamed refs archive individual file revision lines; their trees are not project checkouts")
+	}
+	if scope == "trunk" {
+		s.ScopeLimitations = append(s.ScopeLimitations, "trunk scope excludes nontrunk revisions from the requested import and verification")
+	}
+	for _, file := range in.Files {
+		if file.DefaultBranch != "" {
+			s.ScopeLimitations = append(s.ScopeLimitations, "trunk means numeric 1.N revisions; CVS default vendor checkout behavior is separate")
+			break
+		}
+	}
 	for k, rev := range in.Revisions {
 		if imports[k] == nil {
 			s.Unimported++
@@ -110,7 +135,7 @@ func (r *Repository) Status(ctx context.Context, scope string) (Summary, error) 
 	if err != nil {
 		return Summary{}, err
 	}
-	return summarize("status", scope, in, imports, len(r.Manifest.Refs)), nil
+	return summarize("status", scope, in, imports, r.Manifest.Refs), nil
 }
 
 func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
@@ -124,10 +149,7 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if err := opts.hit("scan-complete"); err != nil {
 		return Summary{}, err
 	}
-	if opts.Scope == "all" && len(in.Revisions) != in.Trunk {
-		return Summary{}, diag.New("unsupported", "sync.scope", "nontrunk history requires branch support; use --scope trunk deliberately", nil, "trunk_revisions", in.Trunk, "unsupported_nontrunk", len(in.Revisions)-in.Trunk)
-	}
-	s := summarize("sync", opts.Scope, in, imports, len(r.Manifest.Refs))
+	s := summarize("sync", opts.Scope, in, imports, r.Manifest.Refs)
 	r.Runner.Log.Info("sync inventory", "scope", opts.Scope, "files", s.Files, "discovered", s.Discovered, "imported", s.Imported, "pending", s.Pending, "nontrunk", s.Nontrunk, "unimported", s.Unimported)
 	lastProgress := time.Now()
 	pending := slices.Clone(in.Ordered)
@@ -140,6 +162,13 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 				break
 			}
 			if rev.Predecessor != "" && imports[key(rev.Path, rev.Predecessor)] == nil {
+				continue
+			}
+			ready, err := r.prepareBranch(ctx, rev.Ref, in, imports, &opts)
+			if err != nil {
+				return Summary{}, err
+			}
+			if !ready {
 				continue
 			}
 			c, err := r.importRevision(ctx, rev, in.Files[rev.Path], &opts)
@@ -160,7 +189,12 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 			return Summary{}, diag.New("integrity", "sync.order", "unresolvable ancestry dependencies", nil, "pending", len(pending))
 		}
 	}
-	final := summarize("sync", opts.Scope, in, imports, len(r.Manifest.Refs))
+	if opts.Scope == "all" {
+		if err := r.seedRemaining(ctx, in, imports, &opts); err != nil {
+			return Summary{}, err
+		}
+	}
+	final := summarize("sync", opts.Scope, in, imports, r.Manifest.Refs)
 	final.Published = s.Published
 	return final, nil
 }
@@ -212,6 +246,9 @@ func (r *Repository) importRevision(ctx context.Context, rev *Revision, file *Fi
 	}
 	if err := opts.hit("before-publish"); err != nil {
 		return nil, err
+	}
+	if rev.Ref != trunkRef {
+		r.Manifest.Members[rev.Ref][hexBytes(rev.Path)] = rev.Line[:strings.LastIndexByte(rev.Line, '.')]
 	}
 	if err := r.publish(ctx, rev.Ref, oid, parent); err != nil {
 		return nil, err
