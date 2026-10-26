@@ -1,0 +1,90 @@
+
+RCS file: /fixture/cvsroot/module/active,v
+head: 1.2
+branch:
+locks: strict
+access list:
+symbolic names:
+	feature: 1.2.0.2
+	RELEASE: 1.1.1.1
+	VENDOR: 1.1.1
+keyword substitution: kv
+total revisions: 4;	selected revisions: 4
+description:
+----------------------------
+revision 1.2
+date: 2026/10/26 11:08:55;  author: raf;  state: Exp;  lines: +1 -1
+branches:  1.2.2;
+second
+----------------------------
+separator in message
+----------------------------
+revision 1.1
+date: 2026/10/26 11:08:54;  author: raf;  state: Exp;
+branches:  1.1.1;
+Initial revision
+----------------------------
+revision 1.1.1.1
+date: 2026/10/26 11:08:54;  author: raf;  state: Exp;  lines: +0 -0
+vendor import
+----------------------------
+revision 1.2.2.1
+date: 2026/10/26 11:08:59;  author: raf;  state: Exp;  lines: +1 -1
+branch change
+=============================================================================
+
+RCS file: /fixture/cvsroot/module/binary file,v
+head: 1.1
+branch:
+locks: strict
+access list:
+symbolic names:
+	feature: 1.1.0.2
+keyword substitution: b
+total revisions: 1;	selected revisions: 1
+description:
+----------------------------
+revision 1.1
+date: 2026/10/26 11:08:57;  author: raf;  state: Exp;
+binary
+=============================================================================
+
+RCS file: /fixture/cvsroot/module/Attic/branch-only,v
+head: 1.1
+branch:
+locks: strict
+access list:
+symbolic names:
+	feature: 1.1.0.2
+keyword substitution: kv
+total revisions: 2;	selected revisions: 2
+description:
+----------------------------
+revision 1.1
+date: 2026/10/26 11:08:59;  author: raf;  state: dead;
+branches:  1.1.2;
+file branch-only was initially added on branch feature.
+----------------------------
+revision 1.1.2.1
+date: 2026/10/26 11:08:59;  author: raf;  state: Exp;  lines: +1 -0
+branch change
+=============================================================================
+
+RCS file: /fixture/cvsroot/module/Attic/removed,v
+head: 1.2
+branch:
+locks: strict
+access list:
+symbolic names:
+keyword substitution: kv
+total revisions: 2;	selected revisions: 2
+description:
+----------------------------
+revision 1.2
+date: 2026/10/26 11:08:57;  author: raf;  state: dead;  lines: +0 -0
+delete removed
+----------------------------
+revision 1.1
+date: 2026/10/26 11:08:56;  author: raf;  state: Exp;
+add removed
+=============================================================================
