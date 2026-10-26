@@ -134,7 +134,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	defer cancel()
 	reportFailure := func(err error, stacks bool) int {
 		if ctx.Err() != nil {
-			log.Warn("Interrupted; cleaning up")
+			log.Warn("Interrupted; shutting down")
 			return 130
 		}
 		diag.Failure(log, err, stacks)
