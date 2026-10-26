@@ -1,9 +1,9 @@
 # Proposal: reproducible CVS imports
 
-Status: design proposal. Reproducibility from scratch and across incremental
-runs is a required property. The current implementation does not provide it.
-This document identifies the remaining decisions; it does not authorize history
-rewrites or change the importer.
+Status: superseded design discussion. The implemented canonical importer is
+documented in [the v2 format contract](doc-format-v2.md). This historical proposal
+does not describe the current import algorithm or authorize migrating an
+existing mirror.
 
 ## Required guarantee
 

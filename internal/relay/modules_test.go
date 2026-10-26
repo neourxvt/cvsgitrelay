@@ -45,15 +45,7 @@ func TestSchmorpModules(t *testing.T) {
 			t.Fatalf("unsupported module layout accepted: %s", listing)
 		}
 	}
-	// Existing mirrors without an explicit layout retain their original
-	// literal mapping; alias support must not reinterpret published identities.
-	r := Repository{Config: Config{Module: "project"}, Manifest: Manifest{Refs: map[string]string{trunkRef: zeroOID}}}
-	if err := r.validateLayout(literalMapping("project")); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.validateLayout([]ModuleMapping{{Source: "other"}}); err == nil {
-		t.Fatal("legacy mirror accepted a different source layout")
-	}
+
 }
 
 func TestCompositeModuleImport(t *testing.T) {
@@ -83,7 +75,7 @@ func TestCompositeModuleImport(t *testing.T) {
 	ctx := context.Background()
 	runner := &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 16 << 20}
 	dest := filepath.Join(t.TempDir(), "mirror.git")
-	if err := Init(ctx, runner, dest, ":fork:"+root, "project"); err != nil {
+	if err := Init(ctx, runner, dest, ":fork:"+root, "project", "composite-fixture", "include", "full"); err != nil {
 		t.Fatal(err)
 	}
 	r, err := Open(ctx, runner, dest)
@@ -99,10 +91,10 @@ func TestCompositeModuleImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Imported != 4 || s.Unimported != 0 {
+	if s.Imported != 4 || s.Pending != 0 {
 		t.Fatalf("unexpected import summary: %+v", s)
 	}
-	entries, err := r.treeEntries(ctx, r.Manifest.Refs[trunkRef])
+	entries, err := testTreeEntries(t, r, r.Manifest.Refs[trunkRef])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +107,7 @@ func TestCompositeModuleImport(t *testing.T) {
 			t.Fatalf("wrong bytes for %q: got %x want %x", path, data, want)
 		}
 	}
-	for _, mode := range []string{"deep", "tip"} {
+	for _, mode := range []string{"full"} {
 		if _, err := r.Verify(ctx, Options{Scope: "all", Mode: mode}); err != nil {
 			t.Fatalf("verify %s: %v", mode, err)
 		}
@@ -133,12 +125,12 @@ func TestCompositeModuleImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if len(r.Manifest.Layout) != 2 {
+	if len(r.Config.Policy.Mappings) != 2 {
 		t.Fatal("module layout was not recovered from Git")
 	}
 	writeFixture(t, filepath.Join(admin, "modules"), []byte("project -a project_ project/libev\nproject_ -d project main-source\nproject/libev -d project/libev replacement-library\n"))
 	fixtureCVS(t, root, admin, "commit", "-m", "change dependency mapping", "modules")
-	if _, err := r.Status(ctx, "all"); diag.Code(err) != "integrity" {
+	if _, err := r.Status(ctx, "all"); diag.Code(err) != "config" {
 		t.Fatalf("module remapping was not rejected: %v", err)
 	}
 }

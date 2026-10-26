@@ -28,6 +28,7 @@ type cliOptions struct {
 	repo                        string
 	cvsroot                     string
 	module                      string
+	sourceID                    string
 	submodules                  string
 	requireConsecutiveRevisions bool
 	scope                       string
@@ -69,11 +70,33 @@ func newRootCommand(setExit func(int)) *cobra.Command {
 	}
 	addOperationFlags(root, "sync", options)
 	root.AddCommand(
+		newCoverageCommand(setExit),
 		newOperationCommand("status", "Show discovered, imported, and pending CVS revisions.", setExit),
 		newOperationCommand("verify", "Check the mirror against CVS and Git integrity rules.", setExit),
 		newOperationCommand("mirror", "Create or incrementally update a deterministic local CVSROOT.", setExit),
 	)
 	return root
+}
+
+// The preferred upgrade builds a new destination. Coverage comparison reads v1
+// provenance solely to verify that transition, without migrating existing refs.
+func newCoverageCommand(setExit func(int)) *cobra.Command {
+	return &cobra.Command{Use: "coverage OLD.git NEW.git", Short: "Compare v1 revision coverage and live bytes with a new v2 destination.", Args: cobra.ExactArgs(2), Run: func(cmd *cobra.Command, args []string) {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		log := slog.New(diag.NewTextHandler(os.Stderr, nil))
+		runner := &process.Runner{Log: log, Timeout: 5 * time.Minute, MaxOutput: 256 << 20}
+		summary, err := relay.CompareCoverage(ctx, runner, args[0], args[1])
+		if encodeErr := json.NewEncoder(os.Stdout).Encode(summary); encodeErr != nil && err == nil {
+			err = diag.New("io", "coverage.output", "write coverage summary", encodeErr)
+		}
+		if err != nil {
+			diag.Failure(log, err, false)
+			setExit(exitCode(diag.Code(err)))
+			return
+		}
+		setExit(0)
+	}}
 }
 
 func newOperationCommand(operation, short string, setExit func(int)) *cobra.Command {
@@ -102,11 +125,12 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 	if operation != "mirror" {
 		flags.StringVar(&options.repo, "repo", "", "override destination.repo (relative to the caller)")
 		flags.StringVar(&options.submodules, "submodules", "exclude", "override source.submodules: exclude or include")
-		flags.StringVar(&options.scope, "scope", "all", "override sync.scope: trunk or all")
+		flags.StringVar(&options.scope, "scope", "all", "override sync.scope: all")
 	}
 	flags.StringVar(&options.cvsroot, "cvsroot", "", "override source.cvsroot; use external authentication")
+	flags.StringVar(&options.sourceID, "source-id", "", "override source.source_id: stable logical source identity")
 	flags.StringVar(&options.module, "module", "", "override source.module")
-	flags.BoolVar(&options.requireConsecutiveRevisions, "require-consecutive-revisions", false, "override source.require_consecutive_revisions: reject numbering gaps")
+	flags.BoolVar(&options.requireConsecutiveRevisions, "require-consecutive-revisions", false, "reject numbering gaps in complete CVS revision listings")
 	flags.StringVar(&options.logFormat, "log-format", "text", "override logging.format: text or json")
 	flags.StringVar(&options.logLevel, "log-level", "info", "override logging.level: debug, info, warn or error")
 	flags.BoolVar(&options.errorStacks, "error-stacks", true, "override logging.error_stacks")
@@ -119,8 +143,8 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 	if operation == "sync" {
 		flags.StringVar(&options.failpoint, "failpoint", "", "override debug.failpoint: [kill:]STAGE[:ORDINAL]")
 	}
-	if operation == "verify" {
-		flags.StringVar(&options.mode, "mode", "metadata", "override verify.mode: metadata, deep or tip")
+	if operation != "mirror" {
+		flags.StringVar(&options.mode, "mode", "full", "override verify.mode: full or trust-append-only (fixed policy)")
 	}
 }
 
@@ -162,6 +186,8 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			cfg.Destination.Repo = options.repo
 		case "cvsroot":
 			cfg.Source.CVSRoot = options.cvsroot
+		case "source-id":
+			cfg.Source.SourceID = options.sourceID
 		case "module":
 			cfg.Source.Module = options.module
 		case "submodules":
@@ -215,7 +241,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	if operation == "sync" {
 		// First sync provisions a new destination before opening it for import.
 		if _, statErr := os.Stat(filepath.Join(cfg.Destination.Repo, "cvsgitrelay.json")); os.IsNotExist(statErr) {
-			err = relay.Init(ctx, runner, cfg.Destination.Repo, cfg.Source.CVSRoot, cfg.Source.Module)
+			err = relay.Init(ctx, runner, cfg.Destination.Repo, cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.SourceID, cfg.Source.Submodules, cfg.Verify.Mode)
 		} else if statErr != nil {
 			err = diag.New("io", "sync.open", "cannot inspect destination configuration", statErr)
 		}
@@ -236,7 +262,10 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			defer repository.Close()
 			log = log.With("source_id", repository.Config.SourceID)
 			runner.Log = log
-			if err = repository.ConfigureSource(cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.Submodules); err == nil {
+			if err = repository.ValidateRequestedPolicy(cfg.Source.SourceID, cfg.Verify.Mode); err == nil {
+				err = repository.ConfigureSource(cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.Submodules)
+			}
+			if err == nil {
 				repository.RequireConsecutiveRevisions = cfg.Source.RequireConsecutiveRevisions
 				switch operation {
 				case "sync":
@@ -244,7 +273,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 				case "status":
 					summary, err = repository.Status(ctx, cfg.Sync.Scope)
 				case "verify":
-					summary, err = repository.Verify(ctx, relay.Options{Scope: cfg.Sync.Scope, Mode: cfg.Verify.Mode, ProgressInterval: progressInterval})
+					summary, err = repository.Verify(ctx, relay.Options{Scope: cfg.Sync.Scope, Mode: cfg.Verify.Mode, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval})
 				}
 			}
 		}

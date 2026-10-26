@@ -102,7 +102,10 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	if output == "" || options.Connections < 1 {
 		return summary, diag.New("config", "mirror", "output directory and positive connection limit are required", nil)
 	}
-	if err := validateConfig(Config{Version: 1, SourceID: strings.Repeat("0", 32), CVSRoot: root, Module: module, KeywordMode: "kb", FileMode: "100644", Scope: "all", RefFormat: "reftable"}); err != nil {
+	if _, err := sourceDirectory(root); err != nil {
+		return summary, err
+	}
+	if err := modulePath(module); err != nil {
 		return summary, err
 	}
 	output, err = filepath.Abs(output)

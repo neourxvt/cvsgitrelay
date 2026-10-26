@@ -2,14 +2,13 @@ package relay
 
 import (
 	"context"
-	"encoding/json"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"cvsgitrelay/internal/canonical"
 	"cvsgitrelay/internal/diag"
 )
 
@@ -22,301 +21,140 @@ type Options struct {
 	faultCounts      map[string]int
 }
 
+// Summaries identify the configured integrity guarantee on every operation.
 type Summary struct {
-	Operation         string   `json:"operation"`
-	Scope             string   `json:"scope"`
-	Submodules        string   `json:"submodules"`
-	ExcludedModules   []string `json:"excluded_modules,omitempty"`
-	ExcludedFiles     int      `json:"excluded_files"`
-	ExcludedRevisions int      `json:"excluded_revisions"`
-	Files             int      `json:"files"`
-	Discovered        int      `json:"discovered"`
-	Imported          int      `json:"imported"`
-	Pending           int      `json:"pending"`
-	Trunk             int      `json:"trunk"`
-	Nontrunk          int      `json:"nontrunk"`
-	Vendor            int      `json:"vendor"`
-	Dead              int      `json:"dead"`
-	Published         int      `json:"published"`
-	Unimported        int      `json:"unimported"`
-	Refs              int      `json:"refs"`
-	NamedBranches     int      `json:"named_branches"`
-	ArchivalRefs      int      `json:"archival_refs"`
-	ScopeLimitations  []string `json:"scope_limitations,omitempty"`
+	Operation      string `json:"operation"`
+	Verification   string `json:"verification_policy"`
+	State          string `json:"state"`
+	Files          int    `json:"files"`
+	Discovered     int    `json:"discovered"`
+	Imported       int    `json:"imported"`
+	Pending        int    `json:"pending"`
+	Published      int    `json:"published"`
+	Refs           int    `json:"refs"`
+	SourceBytes    int64  `json:"source_bytes"`
+	SourceRequests int    `json:"source_requests"`
+	ObjectWrites   int    `json:"object_writes"`
+	ElapsedMillis  int64  `json:"elapsed_ms"`
 }
 
-func (r *Repository) inspect(ctx context.Context) (*Inventory, map[string]*Imported, map[string][]*Imported, error) {
-	imports, chains, err := r.reconstruct(ctx)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	in, err := r.scan(ctx)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err := r.validatePublished(ctx, in, imports, chains); err != nil {
-		return nil, nil, nil, err
-	}
-	return in, imports, chains, nil
-}
-
-func (r *Repository) validatePublished(ctx context.Context, in *Inventory, imports map[string]*Imported, chains map[string][]*Imported) error {
-	for k, c := range imports {
-		rev := in.Revisions[k]
-		if rev == nil {
-			return diag.New("integrity", "source.compare", "published revision disappeared upstream; history removal or incomplete scan", nil, "path_hex", c.Meta.PathHex, "revision", c.Meta.Revision, "commit", c.OID)
-		}
-		expected := metadata(rev, in.Files[rev.Path], c.Meta.Blob)
-		// CVS clears a file's default vendor branch during an ordinary trunk
-		// check-in. This field records what was observed at import time; it is
-		// not immutable per-revision metadata or the revision's destination.
-		expected.DefaultBranch = c.Meta.DefaultBranch
-		a, _ := json.Marshal(expected)
-		b, _ := json.Marshal(c.Meta)
-		if string(a) != string(b) {
-			return diag.New("integrity", "source.compare", "published revision metadata, ancestry or branch mapping changed", nil, "path_hex", c.Meta.PathHex, "revision", c.Meta.Revision, "commit", c.OID, "expected_metadata", expected, "published_metadata", c.Meta)
-		}
-		if rev.Predecessor != "" && imports[key(rev.Path, rev.Predecessor)] == nil {
-			return diag.New("integrity", "source.compare", "previously missed predecessor now appears before a published revision", nil, "path_hex", c.Meta.PathHex, "revision", c.Meta.Revision, "predecessor", rev.Predecessor)
-		}
-		if err := r.checkTransition(ctx, c); err != nil {
-			return err
-		}
-	}
-	for ref, chain := range chains {
-		last := map[string]string{}
-		ordered := slices.Clone(chain)
-		slices.Reverse(ordered)
-		for _, c := range ordered {
-			if c.Kind == "seed" {
-				continue
-			}
-			rev := in.Revisions[key(mustPath(c.Meta.PathHex), c.Meta.Revision)]
-			previous := last[rev.Path]
-			if previous != "" && previous != rev.Predecessor {
-				return diag.New("integrity", "history.order", "same-file ancestry is out of order", nil, "ref", ref, "commit", c.OID, "previous_revision", previous, "predecessor", rev.Predecessor)
-			}
-			last[rev.Path] = rev.Number
-		}
-	}
-	return r.validateBranches(ctx, in, imports, chains)
-}
-
-func mustPath(s string) string { p, _ := decodePath(s); return p }
-
-func summarize(op, scope string, in *Inventory, imports map[string]*Imported, refs map[string]string) Summary {
-	s := Summary{Operation: op, Scope: scope, Files: len(in.Files), Discovered: len(in.Revisions), Imported: len(imports), Trunk: in.Trunk, Nontrunk: len(in.Revisions) - in.Trunk, Vendor: in.Vendor, Dead: in.Dead, Refs: len(refs)}
-	s.Submodules = in.Submodules
-	s.ExcludedFiles, s.ExcludedRevisions = in.ExcludedFiles, in.ExcludedRevisions
-	for _, mapping := range in.Excluded {
-		s.ExcludedModules = append(s.ExcludedModules, mapping.Destination)
-	}
-	slices.Sort(s.ExcludedModules)
-	for ref := range refs {
-		if ref == trunkRef {
-			continue
-		}
-		if branchKind(ref) == "archive" {
-			s.ArchivalRefs++
+func (r *Repository) generationSummary(op string, in canonical.Inventory) Summary {
+	s := Summary{Operation: op, Verification: r.Config.Policy.Verify, State: r.StateOID, Discovered: len(in.Records), Refs: len(r.Manifest.Refs)}
+	files := map[string]bool{}
+	for _, rev := range in.Records {
+		files[rev.Key.Archive] = true
+		if _, ok := r.Manifest.Revisions[rev.Key.ID()]; ok {
+			s.Imported++
 		} else {
-			s.NamedBranches++
+			s.Pending++
 		}
 	}
-	if s.ArchivalRefs > 0 {
-		s.ScopeLimitations = append(s.ScopeLimitations, "unnamed refs archive individual file revision lines; their trees are not project checkouts")
-	}
-	if scope == "trunk" {
-		s.ScopeLimitations = append(s.ScopeLimitations, "trunk scope excludes nontrunk revisions from the requested import and verification")
-	}
-	for _, file := range in.Files {
-		if file.DefaultBranch != "" {
-			s.ScopeLimitations = append(s.ScopeLimitations, "trunk means numeric 1.N revisions; CVS default vendor checkout behavior is separate")
-			break
-		}
-	}
-	for k, rev := range in.Revisions {
-		if imports[k] == nil {
-			s.Unimported++
-			if scope == "all" || rev.Line == "trunk" {
-				s.Pending++
-			}
-		}
-	}
+	s.Files = len(files)
 	return s
 }
 
-func (r *Repository) Status(ctx context.Context, scope string) (Summary, error) {
-	in, imports, _, err := r.inspect(ctx)
-	if err != nil {
-		return Summary{}, err
-	}
-	return summarize("status", scope, in, imports, r.Manifest.Refs), nil
-}
-
+// Sync verifies the entire fixed scope before deriving a fresh canonical graph.
+// Polling history influences neither ordering nor branch membership.
 func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
-	if opts.Connections == 0 {
-		opts.Connections = 4
+	start := time.Now()
+	r.objectWrites = 0
+	if opts.Mode != "" && opts.Mode != r.Config.Policy.Verify {
+		return Summary{}, diag.New("config", "sync.policy", "verification mode differs from pinned canonical policy", nil)
 	}
-	if opts.Connections < 1 {
-		return Summary{}, diag.New("usage", "sync.configure", "CVS connection limit must be positive", nil)
+	if opts.Scope != "" && opts.Scope != "all" {
+		return Summary{}, diag.New("usage", "sync.scope", "partial scopes cannot publish v2 generations", nil)
 	}
-	if err := opts.hit("scan-start"); err != nil {
+	if opts.Connections < 0 {
+		return Summary{}, diag.New("usage", "sync.configure", "connections must be positive", nil)
+	}
+	if err := r.recoverPublication(ctx); err != nil {
 		return Summary{}, err
 	}
-	in, imports, _, err := r.inspect(ctx)
+	if err := r.loadCurrent(ctx); err != nil {
+		return Summary{}, err
+	}
+	in, stats, err := r.acceptSource(ctx, &opts)
 	if err != nil {
 		return Summary{}, err
 	}
-	if err := opts.hit("scan-complete"); err != nil {
-		return Summary{}, err
-	}
-	// Publish the resolved layout with the next source revision, never as an
-	// independent cursor. A failed or read-only scan cannot pin new state.
-	r.Manifest.Layout = slices.Clone(in.Layout)
-	r.Manifest.Submodules = in.Submodules
-	s := summarize("sync", opts.Scope, in, imports, r.Manifest.Refs)
-	r.Runner.Log.Info("sync inventory", "scope", opts.Scope, "connections", opts.Connections, "submodules", s.Submodules, "excluded_modules", s.ExcludedModules, "excluded_files", s.ExcludedFiles, "excluded_revisions", s.ExcludedRevisions, "files", s.Files, "discovered", s.Discovered, "imported", s.Imported, "pending", s.Pending, "nontrunk", s.Nontrunk, "unimported", s.Unimported)
-	lastProgress := time.Now()
-	pending, err := r.pendingRevisions(in, imports, opts.Scope)
+	g, err := canonical.Build(in, r.Config.Policy)
 	if err != nil {
+		return Summary{}, diag.New("source", "canonical.build", "source cannot form an unambiguous canonical graph", err)
+	}
+	s := r.generationSummary("sync", in)
+	previous := r.StateOID
+	if err := r.publishGeneration(ctx, g, &opts); err != nil {
 		return Summary{}, err
 	}
-	fetches := newRevisionFetches(ctx, pending, opts.Connections, r.fetch)
-	defer fetches.close()
-	for _, rev := range pending {
-		ready, err := r.prepareBranch(ctx, rev.Ref, in, imports, &opts)
-		if err != nil {
-			return Summary{}, err
-		}
-		if !ready {
-			return Summary{}, diag.New("integrity", "sync.order", "unresolved branch seed dependencies", nil, "ref", rev.Ref)
-		}
-		c, err := r.importRevision(ctx, rev, in.Files[rev.Path], &opts, fetches)
-		if err != nil {
-			return Summary{}, diag.New(diag.Code(err), "sync.revision", "revision import stopped; rerun sync after resolving the cause", err, "path_hex", hexBytes(rev.Path), "revision", rev.Number, "ref", rev.Ref, "published_this_run", s.Published)
-		}
-		imports[key(rev.Path, rev.Number)] = c
-		s.Published++
-		if opts.ProgressInterval > 0 && time.Since(lastProgress) >= opts.ProgressInterval {
-			r.Runner.Log.Info("sync progress", "published", s.Published, "pending", s.Pending-s.Published, "path_hex", hexBytes(rev.Path), "revision", rev.Number, "ref", rev.Ref)
-			lastProgress = time.Now()
-		}
+	if err := r.cacheAccepted(in); err != nil && r.Runner.Log != nil {
+		r.Runner.Log.Warn("Content cache could not be saved; the next run will re-read source bytes")
 	}
-	if opts.Scope == "all" {
-		if err := r.seedRemaining(ctx, in, imports, &opts); err != nil {
-			return Summary{}, err
-		}
+	s.Imported = len(in.Records)
+	s.Pending = 0
+	s.State = r.StateOID
+	s.Refs = len(g.Manifest.Refs)
+	if previous != g.State {
+		s.Published = len(in.Records)
 	}
-	final := summarize("sync", opts.Scope, in, imports, r.Manifest.Refs)
-	final.Published = s.Published
-	return final, nil
+	s.SourceBytes = stats.Bytes
+	s.SourceRequests = stats.Requests
+	s.ObjectWrites = r.objectWrites
+	s.ElapsedMillis = time.Since(start).Milliseconds()
+	return s, nil
 }
 
-// pendingRevisions plans the same first-ready order used for publication,
-// including every forkpoint needed to seed a branch. Only planning state is
-// advanced here; fetch completion never establishes a published dependency.
-func (r *Repository) pendingRevisions(in *Inventory, imports map[string]*Imported, scope string) ([]*Revision, error) {
-	known := make(map[string]bool, len(imports))
-	for k := range imports {
-		known[k] = true
+func (r *Repository) Status(ctx context.Context, scope string) (Summary, error) {
+	if scope != "" && scope != "all" {
+		return Summary{}, diag.New("usage", "status.scope", "v2 supports only the complete configured scope", nil)
 	}
-	seeded := map[string]bool{trunkRef: true}
-	for ref, oid := range r.Manifest.Refs {
-		seeded[ref] = oid != ""
+	if err := r.loadCurrent(ctx); err != nil {
+		return Summary{}, err
 	}
-	var remaining, ordered []*Revision
-	for _, rev := range in.Ordered {
-		if !known[key(rev.Path, rev.Number)] && (scope != "trunk" || rev.Line == "trunk") {
-			remaining = append(remaining, rev)
-		}
+	in, stats, err := r.acceptSource(ctx, &Options{})
+	if err != nil {
+		return Summary{}, err
 	}
-	for len(remaining) > 0 {
-		i := slices.IndexFunc(remaining, func(rev *Revision) bool {
-			if rev.Predecessor != "" && !known[key(rev.Path, rev.Predecessor)] {
-				return false
-			}
-			if !seeded[rev.Ref] {
-				for path, fork := range in.Branches[rev.Ref] {
-					if !known[key(path, fork)] {
-						return false
-					}
-				}
-			}
-			return true
-		})
-		if i < 0 {
-			return nil, diag.New("integrity", "sync.order", "unresolvable ancestry dependencies", nil, "pending", len(remaining))
-		}
-		rev := remaining[i]
-		ordered = append(ordered, rev)
-		known[key(rev.Path, rev.Number)] = true
-		seeded[rev.Ref] = true
-		remaining = slices.Delete(remaining, i, i+1)
-	}
-	return ordered, nil
+	s := r.generationSummary("status", in)
+	s.SourceBytes = stats.Bytes
+	s.SourceRequests = stats.Requests
+	return s, nil
 }
 
-func (r *Repository) importRevision(ctx context.Context, rev *Revision, file *File, opts *Options, fetches *revisionFetches) (*Imported, error) {
-	blob := "-"
-	if rev.State != "dead" {
-		// Fault counters stay on the publisher goroutine. Fetch hooks bracket
-		// consumption of read-ahead bytes, which may already be available.
-		if err := opts.hit("fetch-start"); err != nil {
-			return nil, err
-		}
-		data, err := fetches.next()
-		if err != nil {
-			return nil, err
-		}
-		if err := opts.hit("fetch-complete"); err != nil {
-			return nil, err
-		}
-		blob, err = r.oid(ctx, data, nil, "hash-object", "-w", "--stdin")
-		if err != nil {
-			return nil, err
-		}
-		if err := opts.hit("blob-written"); err != nil {
-			return nil, err
-		}
+func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) {
+	if opts.Mode != "" && opts.Mode != r.Config.Policy.Verify {
+		return Summary{}, diag.New("config", "verify.policy", "verification mode differs from pinned canonical policy", nil)
 	}
-	parent := r.Manifest.Refs[rev.Ref]
-	tree, err := r.changeTree(ctx, parent, rev.Path, blob)
+	if opts.Scope != "" && opts.Scope != "all" {
+		return Summary{}, diag.New("usage", "verify.scope", "v2 supports only the complete configured scope", nil)
+	}
+	if err := r.loadCurrent(ctx); err != nil {
+		return Summary{}, err
+	}
+	in, stats, err := r.acceptSource(ctx, &opts)
 	if err != nil {
-		return nil, err
+		return Summary{}, err
 	}
-	if err := opts.hit("tree-written"); err != nil {
-		return nil, err
-	}
-	m := metadata(rev, file, blob)
-	args := []string{"commit-tree", tree}
-	if parent != "" {
-		args = append(args, "-p", parent)
-	}
-	oid, err := r.oid(ctx, message(r.Config.SourceID, "revision", m, rev.Log), exporterEnv(rev.Time, authorDisplay(rev.Author)), args...)
+	g, err := canonical.Build(in, r.Config.Policy)
 	if err != nil {
-		return nil, err
+		return Summary{}, err
 	}
-	c := &Imported{OID: oid, Tree: tree, Parent: parent, Kind: "revision", Meta: m, Log: rev.Log}
-	if err := opts.hit("commit-written"); err != nil {
-		return nil, err
+	s := r.generationSummary("verify", in)
+	s.SourceBytes = stats.Bytes
+	s.SourceRequests = stats.Requests
+	if g.State != r.StateOID {
+		return s, diag.New("integrity", "verify.generation", "source has a different canonical generation; run sync", nil)
 	}
-	if err := r.checkTransition(ctx, c); err != nil {
-		return nil, err
+	// Validate every expected raw object without rewriting objects or refs.
+	for oid, obj := range g.Objects {
+		data, err := r.git(ctx, nil, nil, "cat-file", obj.Kind, oid)
+		if err != nil {
+			return s, err
+		}
+		if canonical.OID(obj.Kind, data) != oid {
+			return s, diag.New("integrity", "verify.objects", "canonical object is corrupt", nil)
+		}
 	}
-	if err := opts.hit("before-publish"); err != nil {
-		return nil, err
-	}
-	if rev.Ref != trunkRef {
-		r.Manifest.Members[rev.Ref][hexBytes(rev.Path)] = rev.Line[:strings.LastIndexByte(rev.Line, '.')]
-	}
-	if err := r.publish(ctx, rev.Ref, oid, parent); err != nil {
-		return nil, err
-	}
-	if err := opts.hit("after-publish"); err != nil {
-		return nil, err
-	}
-	r.Runner.Log.Debug("revision published", "path_hex", hexBytes(rev.Path), "revision", rev.Number, "ref", rev.Ref, "commit", oid, "blob", blob, "tree", tree, "parent", parent, "state", rev.State)
-	return c, nil
+	return s, nil
 }
 
 // hit is an explicit developer fault hook, never enabled by default. An ordinal

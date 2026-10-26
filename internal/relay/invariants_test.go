@@ -1,16 +1,6 @@
 package relay
 
-import (
-	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"testing"
-	"time"
-
-	"cvsgitrelay/internal/process"
-)
+import "testing"
 
 func TestSourceLocatorsAndPaths(t *testing.T) {
 	if compareNumber("1.9", "1.10") >= 0 {
@@ -39,90 +29,4 @@ func TestSourceLocatorsAndPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-}
-
-func TestExistingBareAndBinaryProvenance(t *testing.T) {
-	ctx := context.Background()
-	runner := &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 16 << 20}
-	dest := filepath.Join(t.TempDir(), "mirror.git")
-	cmd := exec.Command("git", "init", "--bare", "--ref-format=files", dest)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("init bare: %v\n%s", err, out)
-	}
-	if err := Init(ctx, runner, dest, "/fixture/cvsroot", "module"); err != nil {
-		t.Fatal(err)
-	}
-	r, err := Open(ctx, runner, dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	blob, err := r.oid(ctx, []byte("content\n"), nil, "hash-object", "-w", "--stdin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.seedTree(ctx, map[string]string{"collision": blob, "collision/child": blob}); err == nil {
-		t.Fatal("conflicting seed paths were accepted")
-	}
-	// Untrusted log text can impersonate provenance and contain non-UTF-8 or
-	// NUL bytes; only the controlled header carries source identities.
-	rev := &Revision{Path: "nonutf8-\xff", Number: "1.1", State: "dead", Ref: trunkRef, Author: "user\n<spoof>", Time: 123, Log: []byte("cvsgitrelay-Version: 999\n\n\xff\x00\n")}
-	m := metadata(rev, &File{}, "-")
-	tree, err := r.seedTree(ctx, map[string]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	oid, err := r.oid(ctx, message(r.Config.SourceID, "revision", m, rev.Log), exporterEnv(rev.Time, authorDisplay(rev.Author)), "commit-tree", tree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := r.readCommit(ctx, oid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(c.Log) != string(rev.Log) || c.Meta.PathHex != hexBytes(rev.Path) || c.Meta.AuthorHex != hexBytes(rev.Author) {
-		t.Fatal("source bytes were not reversible")
-	}
-	if err := r.checkTransition(ctx, c); err != nil {
-		t.Fatal(err)
-	}
-	// Simulate an external ref creation after startup. The failed transaction
-	// must leave the ownership checkpoint unchanged, with no partial advance.
-	checkpoint := r.StateOID
-	if _, err := r.git(ctx, nil, nil, "update-ref", trunkRef, oid, zeroOID); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.publish(ctx, trunkRef, oid, ""); err == nil {
-		t.Fatal("CAS conflict was ignored")
-	}
-	refs, err := r.allRefs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if refs[stateRef] != checkpoint {
-		t.Fatal("CAS failure partially advanced checkpoint")
-	}
-	if _, err := r.git(ctx, nil, nil, "update-ref", "-d", trunkRef, oid); err != nil {
-		t.Fatal(err)
-	}
-	// Source settings are pinned by the Git checkpoint, even if someone edits
-	// the private JSON configuration without changing its permissions.
-	r.Close()
-	data, err := os.ReadFile(filepath.Join(dest, "cvsgitrelay.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dest, "cvsgitrelay.json"), []byte(replaceModule(data)), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if other, err := Open(ctx, runner, dest); err == nil {
-		other.Close()
-		t.Fatal("modified immutable configuration was accepted")
-	}
-}
-
-func replaceModule(data []byte) string {
-	// Keep this edit independent of Config's marshaler to exercise on-disk
-	// configuration drift, rather than constructing an invalid JSON file.
-	return strings.Replace(string(data), `"module": "module"`, `"module": "other-module"`, 1)
 }

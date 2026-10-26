@@ -13,7 +13,7 @@ import (
 
 // fixture uses the real CVS client, including its remote server protocol via
 // :fork:, so parser and retrieval assumptions are grounded in actual output.
-func fixture(t *testing.T) (string, string, []byte) {
+func fixture(t testing.TB) (string, string, []byte) {
 	t.Helper()
 	if _, err := exec.LookPath("cvs"); err != nil {
 		t.Skip("CVS is required")
@@ -52,7 +52,7 @@ func fixture(t *testing.T) (string, string, []byte) {
 	return root, w, binary
 }
 
-func fixtureCVS(t *testing.T, root, dir string, args ...string) []byte {
+func fixtureCVS(t testing.TB, root, dir string, args ...string) []byte {
 	t.Helper()
 	cmd := exec.Command("cvs", append([]string{"-f", "-Q", "-d", root}, args...)...)
 	cmd.Dir = dir
@@ -68,7 +68,7 @@ func fixtureCVS(t *testing.T, root, dir string, args ...string) []byte {
 
 var fixtureTimestamp atomic.Int64
 
-func writeFixture(t *testing.T, path string, content []byte) {
+func writeFixture(t testing.TB, path string, content []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, content, 0600); err != nil {
 		t.Fatal(err)
@@ -96,5 +96,32 @@ func TestCVSCapability(t *testing.T) {
 	if os.Getenv("CVSGITRELAY_CAPTURE") == "1" {
 		// Normalize only the disposable server prefix; retain all parser bytes.
 		writeFixture(t, "../../testdata/gnu-cvs-1.11.23.rlog", bytes.ReplaceAll(out, []byte(root), []byte("/fixture/cvsroot")))
+	}
+}
+
+// Captured separator-like logs must survive the shared remote acquisition
+// grammar used by both Git import and the independent CVS-to-CVS mirror.
+func TestCapturedMirrorRlogDialect(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/gnu-cvs-1.11.23.rlog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parse := func(data []byte) (*Inventory, error) {
+		return parseMappedRlogMode(data, []rlogMapping{{RCSPrefix: "/fixture/cvsroot/module/", SourcePrefix: "module"}}, true)
+	}
+	in, err := parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(in.Files) != 4 || len(in.Revisions) != 9 || in.Trunk != 6 || in.Dead != 2 {
+		t.Fatal("captured revision coverage changed")
+	}
+	if !strings.Contains(string(in.Revisions[key("module/active", "1.2")].Log), "\n----------------------------\nseparator in message\n") {
+		t.Fatal("separator-like log data lost")
+	}
+	for _, bad := range [][]byte{data[:len(data)-5], []byte(strings.Replace(string(data), "selected revisions: 4", "selected revisions: 3", 1)), append([]byte("unexpected stdout\n"), data...)} {
+		if _, err := parse(bad); err == nil {
+			t.Fatal("incomplete metadata accepted")
+		}
 	}
 }

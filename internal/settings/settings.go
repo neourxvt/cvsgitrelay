@@ -1,5 +1,5 @@
 // Package settings reads the required, user-managed TOML configuration. Git
-// checkpoints retain source identity and import state independently of this file.
+// generations retain source identity and import state independently of this file.
 package settings
 
 import (
@@ -28,6 +28,7 @@ type Config struct {
 }
 
 type Source struct {
+	SourceID                    string `toml:"source_id"`
 	CVSRoot                     string `toml:"cvsroot"`
 	Module                      string `toml:"module"`
 	Submodules                  string `toml:"submodules"`
@@ -61,7 +62,7 @@ type Process struct {
 }
 
 func defaults() Config {
-	return Config{Source: Source{Submodules: "exclude"}, Sync: Sync{Scope: "all", Connections: 4}, Verify: Verify{Mode: "metadata"},
+	return Config{Source: Source{Submodules: "exclude"}, Sync: Sync{Scope: "all", Connections: 4}, Verify: Verify{Mode: "full"},
 		Logging: Logging{Format: "text", Level: "info", ErrorStacks: true, ProgressInterval: "15s"},
 		Process: Process{CommandTimeout: "5m", MaxOutput: 256 << 20}}
 }
@@ -121,6 +122,9 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.Source.SourceID == "" {
+		return invalid("source.source_id", "an explicit stable logical source ID is required")
+	}
 	if c.Source.CVSRoot == "" {
 		return invalid("source.cvsroot", "CVSROOT is required")
 	}
@@ -133,14 +137,14 @@ func (c Config) Validate() error {
 	if c.Source.Submodules != "exclude" && c.Source.Submodules != "include" {
 		return invalid("source.submodules", "choose exclude or include")
 	}
-	if c.Sync.Scope != "all" && c.Sync.Scope != "trunk" {
-		return invalid("sync.scope", "choose all or trunk")
+	if c.Sync.Scope != "all" {
+		return invalid("sync.scope", "v2 requires all; partial scopes cannot publish")
 	}
 	if c.Sync.Connections < 1 {
 		return invalid("sync.connections", "CVS connection limit must be positive")
 	}
-	if c.Verify.Mode != "metadata" && c.Verify.Mode != "deep" && c.Verify.Mode != "tip" {
-		return invalid("verify.mode", "choose metadata, deep or tip")
+	if c.Verify.Mode != "full" && c.Verify.Mode != "trust-append-only" {
+		return invalid("verify.mode", "choose full or trust-append-only")
 	}
 	if c.Logging.Format != "text" && c.Logging.Format != "json" {
 		return invalid("logging.format", "choose text or json")
@@ -161,7 +165,7 @@ func (c Config) Validate() error {
 	if c.Debug.Failpoint != "" {
 		stage, ordinal, hasOrdinal := strings.Cut(strings.TrimPrefix(c.Debug.Failpoint, "kill:"), ":")
 		valid := false
-		for _, allowed := range []string{"scan-start", "scan-complete", "fetch-start", "fetch-complete", "blob-written", "tree-written", "commit-written", "before-publish", "after-publish", "seed-written", "seed-published"} {
+		for _, allowed := range []string{"scan-start", "scan-complete", "fetch-complete", "blob-written", "tree-written", "commit-written", "before-publish", "after-publish", "objects-written", "before-journal", "journal-written", "projection-updated", "before-journal-cleanup"} {
 			if stage == allowed {
 				valid = true
 				break

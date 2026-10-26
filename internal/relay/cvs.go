@@ -72,10 +72,12 @@ func (r *Repository) scan(ctx context.Context) (*Inventory, error) {
 	}
 	policy := r.submodulePolicy()
 	selected, _ := selectModules(layout, policy)
-	if err := r.validateLayout(selected); err != nil {
+	if err := r.validateLayout(layout); err != nil {
 		return nil, err
 	}
 	out, err := r.cvs(ctx, "", "rlog", r.Config.Module)
+	r.metadataRequests++
+	r.metadataBytes += int64(len(out))
 	if err != nil {
 		return nil, diag.New(diag.Code(err), "cvs.scan", "full source enumeration failed", err, "module_hex", hexBytes(r.Config.Module))
 	}

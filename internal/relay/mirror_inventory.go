@@ -11,9 +11,17 @@ import (
 // Mirror identities use physical source paths, avoiding collisions between a
 // module's checkout names and the repository-wide administrative directory.
 func buildMirrorInventory(files []*File) (*Inventory, error) {
+	return buildFileInventory(files, true)
+}
+
+// Both readers use the complete reported numeric lines. Git retains checkout
+// paths while the independent CVS mirror addresses files by physical paths.
+func buildFileInventory(files []*File, physical bool) (*Inventory, error) {
 	in := &Inventory{Files: map[string]*File{}, Revisions: map[string]*Revision{}}
 	for _, file := range files {
-		file.Path = file.SourcePath
+		if physical {
+			file.Path = file.SourcePath
+		}
 		if _, exists := in.Files[file.Path]; exists {
 			return nil, diag.New("source", "mirror.inventory", "duplicate physical archive", nil)
 		}
@@ -25,7 +33,7 @@ func buildMirrorInventory(files []*File) (*Inventory, error) {
 		lines := map[string][]*Revision{}
 		for _, rev := range file.Revisions {
 			n, err := numbers(rev.Number)
-			if err != nil || len(n)%2 != 0 || slices.Contains(n, 0) {
+			if err != nil || len(n)%2 != 0 || slices.Contains(n, uint64(0)) {
 				return nil, diag.New("source", "mirror.inventory", "invalid CVS revision number", err)
 			}
 			rev.Path, rev.SourcePath = file.Path, file.SourcePath
@@ -52,7 +60,7 @@ func buildMirrorInventory(files []*File) (*Inventory, error) {
 		}
 		for line, revisions := range lines {
 			slices.SortFunc(revisions, func(a, b *Revision) int { return compareNumber(a.Number, b.Number) })
-			ordinal := 0
+			var ordinal uint64
 			for i, rev := range revisions {
 				n, _ := numbers(rev.Number)
 				if n[len(n)-1]-ordinal > 1 {

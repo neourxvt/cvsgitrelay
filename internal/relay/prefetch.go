@@ -23,16 +23,6 @@ type revisionFetches struct {
 	index   int
 }
 
-func newRevisionFetches(ctx context.Context, revisions []*Revision, connections int, fetch func(context.Context, *Revision) ([]byte, error)) *revisionFetches {
-	var live []*Revision
-	for _, rev := range revisions {
-		if rev.State != "dead" {
-			live = append(live, rev)
-		}
-	}
-	return newAllRevisionFetches(ctx, live, connections, fetch)
-}
-
 // Mirror acquisition includes dead revisions because annotation exposes them.
 func newAllRevisionFetches(ctx context.Context, live []*Revision, connections int, fetch func(context.Context, *Revision) ([]byte, error)) *revisionFetches {
 	ctx, cancel := context.WithCancel(ctx)

@@ -3,7 +3,6 @@ package relay
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -184,6 +183,8 @@ func excludedPath(path string, excluded []ModuleMapping) bool {
 
 func (r *Repository) moduleLayout(ctx context.Context) ([]ModuleMapping, map[string][]string, error) {
 	out, err := r.cvs(ctx, "", "checkout", "-c")
+	r.metadataRequests++
+	r.metadataBytes += int64(len(out))
 	if err != nil {
 		return nil, nil, diag.New(diag.Code(err), "modules.discover", "cannot read CVS module definitions", err)
 	}
@@ -195,25 +196,19 @@ func (r *Repository) moduleLayout(ctx context.Context) ([]ModuleMapping, map[str
 	return layout, definitions, err
 }
 
-// Legacy literal mirrors have an implicit identity mapping. A new layout may
-// be pinned only before imports, or when making that same mapping explicit.
+// Module layouts are fixed canonical policy, checked before source acceptance.
 func (r *Repository) validateLayout(layout []ModuleMapping) error {
-	// A failed import may have prepared an in-memory layout without ever
-	// publishing it. Only data refs make that selection authoritative.
-	if len(r.Manifest.Refs) == 0 {
+	if r.mirroring || len(r.Config.Policy.Mappings) == 0 {
 		return nil
 	}
-	expected := r.Manifest.Layout
-	if len(expected) == 0 {
-		expected = literalMapping(r.Config.Module)
+	expected := r.Config.Policy.Mappings
+	if len(expected) != len(layout) {
+		return diag.New("config", "modules.compare", "module layout changed; use a new destination", nil)
 	}
-	if len(expected) > 0 && !sameMappings(expected, layout) {
-		return diag.New("integrity", "modules.compare", "CVS module mapping differs from the published source layout", nil, "expected_mapping", expected, "actual_mapping", layout)
+	for i, m := range layout {
+		if m.Source != expected[i].Archive || m.Destination != expected[i].Checkout {
+			return diag.New("config", "modules.compare", "module layout changed; use a new destination", nil)
+		}
 	}
 	return nil
-}
-
-func mappingFingerprint(layout []ModuleMapping) string {
-	data, _ := json.Marshal(layout)
-	return digest(data)
 }

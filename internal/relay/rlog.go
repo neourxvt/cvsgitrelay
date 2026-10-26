@@ -22,18 +22,8 @@ type rlogMapping struct {
 	Excluded                                   bool
 }
 
-// parseRlog recognizes the demonstrated GNU CVS grammar. A separator in a log
-// message is data unless it also impersonates a complete structural boundary.
-// Such extra records fail the declared count and uniqueness checks.
-func parseRlog(data []byte, prefix string) (*Inventory, error) {
-	return parseMappedRlog(data, []rlogMapping{{RCSPrefix: prefix}})
-}
-
-func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
-	return parseMappedRlogMode(data, mappings, false)
-}
-
-// Mirror discovery retains CVS fields independently of Git import restrictions.
+// Both importers share the exposed GNU CVS grammar; the CVS mirror additionally
+// preserves administrative fields and states outside the canonical Git model.
 func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inventory, error) {
 	if bytes.IndexByte(data, 0) >= 0 {
 		return nil, diag.New("parse", "rlog", "NUL in metadata output", nil)
@@ -149,7 +139,7 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 				return nil, parseError(pos, "invalid symbolic name")
 			}
 			n, _ := numbers(num)
-			if slices.Contains(n, 0) {
+			if slices.Contains(n, uint64(0)) {
 				if _, ok := branchNumber(num); !ok {
 					return nil, parseError(pos, "invalid magic branch symbol")
 				}
@@ -173,8 +163,8 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 		total, _ := strconv.Atoi(m[1])
 		selected, _ := strconv.Atoi(m[2])
 		pos++
-		if (total < 1 && !mirror) || total != selected {
-			return nil, parseError(pos, "empty or filtered history; total and selected counts must match")
+		if total != selected {
+			return nil, parseError(pos, "filtered history; total and selected counts must match")
 		}
 		if _, ok = take("description:"); !ok {
 			return nil, parseError(pos, "expected description")
@@ -230,7 +220,10 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 			}
 			// rlog adds a newline after each log. Preserve the exposed bytes,
 			// including the final newline and all separator-like message lines.
-			r.Log = []byte(strings.Join(lines[logStart:pos], "\n") + "\n")
+			r.Log = []byte(strings.Join(lines[logStart:pos], "\n"))
+			if pos > logStart {
+				r.Log = append(r.Log, '\n')
+			}
 			f.Revisions = append(f.Revisions, r)
 		}
 		if pos >= len(lines) || !fileBoundary(lines, pos) {
@@ -250,13 +243,7 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 			files = append(files, f)
 		}
 	}
-	var in *Inventory
-	var err error
-	if mirror {
-		in, err = buildMirrorInventory(files)
-	} else {
-		in, err = buildInventory(files)
-	}
+	in, err := buildFileInventory(files, mirror)
 	if err != nil {
 		return nil, err
 	}
@@ -278,10 +265,6 @@ func fileBoundary(lines []string, i int) bool {
 		j++
 	}
 	return j == len(lines) || strings.HasPrefix(lines[j], "RCS file: ")
-}
-
-func parseMetadata(s string, r *Revision) error {
-	return parseMetadataMode(s, r, false)
 }
 
 func parseMetadataMode(s string, r *Revision, mirror bool) error {

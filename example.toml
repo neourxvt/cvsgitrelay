@@ -1,9 +1,10 @@
-# The default invocation syncs; status and verify are separate operations:
+# Import directly from remote CVS into a fresh v2 Git destination:
 #   ./cycle.sh example.toml
 #   ./cycle.sh status example.toml
 #   ./cycle.sh verify example.toml
+#   ./cycle.sh coverage ./git-rxvt-unicode ./git-rxvt-unicode-v2
+# Optional independent CVS-to-CVS mirror:
 #   ./cycle.sh mirror example.toml --output ./cvsroot-rxvt-unicode
-#   ./cycle.sh example.toml --cvsroot "$PWD/cvsroot-rxvt-unicode" --repo ./git-debug
 # Mirror incrementally copies all revision lines and included modules; it does not
 # use destination.repo, sync.scope or source.submodules.
 #
@@ -14,6 +15,10 @@
 # TOML file, while an explicit --repo override is relative to the caller.
 
 [source]
+# Required operator-assigned stable logical source identity. Reuse for aliases
+# of this source. CLI override: --source-id
+source_id = "schmorp-rxvt-unicode"
+
 # Required CVS locator. Use CVS authentication facilities for credentials;
 # passwords embedded in CVSROOT are rejected. Never commit private credentials.
 # CLI override: --cvsroot
@@ -29,42 +34,38 @@ module = "rxvt-unicode"
 #            at the subdirectories specified by the CVS module definitions.
 # These are CVS module inclusions, not Git submodule links or separate mirrors.
 # Ordinary nested source directories remain part of the main module.
-# The policy is pinned with the first import. To change it after revisions have
-# been published, use a new destination; published history is never rewritten.
+# The policy is pinned at initialization. A different selection requires a new
+# destination. Supported source evolution can rewrite canonical Git history.
 # CLI override: --submodules
 submodules = "exclude"
 
-# False (default): warn about skipped revision numbers and proceed with the
-# revisions CVS lists. True: reject any numbering gap before importing.
-# Applies to sync, status and verify; can change between runs. Count checks,
-# missing forkpoint checks and checks against published history remain enabled.
+# Require consecutive reported revision labels when true. The default accepts
+# gaps using the complete listed line and validated branch/forkpoint metadata.
 # CLI override: --require-consecutive-revisions[=false]
 require_consecutive_revisions = false
 
 [destination]
-# Required dedicated bare Git destination. Sync initializes a new destination
-# automatically; init is also available explicitly. Existing nonempty unmanaged
-# repositories are rejected. CLI override: --repo
-repo = "./git-rxvt-unicode"
+# Required dedicated bare Git destination. Sync initializes it automatically.
+# Use a fresh directory; existing v1 mirrors and nonempty unmanaged repositories
+# are rejected. CLI override: --repo
+repo = "./git-rxvt-unicode-v2"
 
 [sync]
-# "all" (default): every revision line in the configured module selection.
-# "trunk": numeric 1.N revisions only; report remaining selected revisions.
-# CLI override: --scope (also applies to status and verify)
+# V2 always imports the entire configured scope. Partial scopes are rejected.
+# CLI override: --scope
 scope = "all"
 
-# Maximum simultaneous CVS revision fetches. Must be positive; 1 uses one
-# connection. Git commits and checkpoints are still published in order.
-# The read-ahead window is bounded by this limit; increasing it also increases
-# memory use for fetched contents. CLI override: --connections
+# Parallel CVS revision reads. Scheduling never affects canonical bytes.
+# CLI override: --connections
 connections = 2
 
 [verify]
-# "metadata" (default): compare identities, metadata, trees and ancestry.
-# "deep": also retrieve and hash every imported live revision and check objects.
-# "tip": compare Git tips with independent CVS working checkouts.
-# CLI override: --mode
-mode = "metadata"
+# Fixed canonical source verification policy, applied on every sync/status/verify:
+# "full" (default): re-read and compare all accepted records and content.
+# "trust-append-only": may reuse fingerprinted historical content, allowing
+# silent old-content mutations with unchanged metadata to escape detection.
+# A change requires a fresh destination. CLI override: --mode
+mode = "full"
 
 [logging]
 # "text" (default): human-readable progress and indented failure reports;
@@ -98,13 +99,16 @@ max_output = 268435456
 
 [debug]
 # Deliberate interruption for developer recovery checks. Empty disables it.
-# Syntax: "[kill:]STAGE[:ORDINAL]", for example "after-publish:2".
-# Stages: scan-start, scan-complete, fetch-start, fetch-complete, blob-written,
-# tree-written, commit-written, before-publish, after-publish, seed-written,
-# seed-published. ORDINAL defaults to 1. The kill: prefix sends SIGKILL;
-# otherwise the command returns exit 8. CLI override: --failpoint
+# Syntax: "[kill:]STAGE[:ORDINAL]", for example "projection-updated:2".
+# Stages: scan-start, fetch-complete, scan-complete, blob-written, tree-written,
+# commit-written, objects-written, before-journal, journal-written,
+# before-publish, after-publish, projection-updated, before-journal-cleanup.
+# ORDINAL defaults to 1. kill: sends SIGKILL; otherwise exit 8.
+# CLI override: --failpoint
 failpoint = ""
 
-# Fixed import policies are not configurable: -kb bytes, mode 100644, SHA-1 Git
-# objects, reftable refs, provenance version 1, and exporter-owned ref namespaces.
-# Source IDs and checkpoints are generated and maintained by cvsgitrelay.
+# Fixed v2 profiles: exact CVS -kb bytes, mode 100644, SHA-1 Git objects, ASCII
+# provenance and manifest, complete deterministic replay, single state-ref CAS.
+# Remote Git imports require only normal CVS read access, without server files.
+# The complete rlog dialect, ancestry and log normalization are specified in
+# doc-format-v2.md.
