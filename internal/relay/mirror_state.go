@@ -50,6 +50,13 @@ type mirrorEntry struct {
 	Annotated  bool           `json:"annotated,omitempty"`
 }
 
+// Only this compact index stays resident. Full annotations and revision
+// metadata are decoded one record at a time from the existing cache format.
+type mirrorCachedEntry struct {
+	Blob      string
+	Annotated bool
+}
+
 // Byte slices use JSON base64 so supported non-UTF-8 paths and authors survive
 // cache round trips without JSON's replacement of invalid string bytes.
 type mirrorRevision struct {
@@ -68,7 +75,7 @@ type cvsMirror struct {
 	progress            *mirrorProgress
 	output              string
 	state               string
-	entries             map[string]mirrorEntry
+	entries             map[string]mirrorCachedEntry
 	summary             MirrorSummary
 	modes               map[string]fs.FileMode
 	directories         []string
@@ -141,7 +148,7 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	}); err != nil {
 		return summary, err
 	}
-	m := &cvsMirror{output: output, state: filepath.Join(output, mirrorStateDir), entries: map[string]mirrorEntry{},
+	m := &cvsMirror{output: output, state: filepath.Join(output, mirrorStateDir), entries: map[string]mirrorCachedEntry{},
 		source: &Repository{Config: Config{CVSRoot: root, Module: module}, Runner: runner, Submodules: "include", mirroring: true, RequireConsecutiveRevisions: requireConsecutive}}
 	m.modes = map[string]fs.FileMode{}
 	m.directoryModes = map[string]fs.FileMode{}
@@ -407,7 +414,7 @@ func (m *cvsMirror) saveAnnotatedEntry(revision *Revision, data, annotation []by
 	if err := mirrorWrite(filepath.Join(m.state, "revisions", id+".json"), encoded); err != nil {
 		return err
 	}
-	m.entries[id] = entry
+	m.entries[id] = mirrorCachedEntry{Blob: entry.Blob, Annotated: entry.Annotated}
 	return nil
 }
 
@@ -436,111 +443,9 @@ func (m *cvsMirror) loadEntries(inventory *Inventory) error {
 		if (entry.Blob == "" && (current.State != "dead" || entry.Annotated)) || (entry.Blob != "" && (len(entry.Blob) != 64 || strings.Trim(entry.Blob, "0123456789abcdef") != "")) {
 			return diag.New("integrity", "mirror.cache", "invalid cached content digest", nil)
 		}
-		m.entries[mirrorKey(current)] = entry
+		m.entries[mirrorKey(current)] = mirrorCachedEntry{Blob: entry.Blob, Annotated: entry.Annotated}
 	}
 	return nil
-}
-
-func (m *cvsMirror) contents(ctx context.Context, revisions []*Revision, connections int) (map[string][]byte, map[string][]string, error) {
-	contents := map[string][]byte{}
-	origins := map[string][]string{}
-	var missing []*Revision
-	for _, rev := range revisions {
-		entry, exists := m.entries[mirrorKey(rev)]
-		if !exists || !entry.Annotated {
-			missing = append(missing, rev)
-		}
-	}
-	fetches := newAllRevisionFetches(ctx, missing, connections, func(ctx context.Context, rev *Revision) ([]byte, error) {
-		return m.source.cvs(ctx, "", "rannotate", "-F", "-r", rev.Number, rev.SourcePath)
-	})
-	defer fetches.close()
-	for _, rev := range revisions {
-		m.progress.update("activity", "Reading revision contents", "path", rev.SourcePath, "revision", rev.Number)
-		entry, exists := m.entries[mirrorKey(rev)]
-		raw := entry.Annotation
-		if !exists || !entry.Annotated {
-			var err error
-			raw, err = fetches.next()
-			if err != nil {
-				return nil, nil, err
-			}
-		}
-		annotated, labels, err := parseMirrorAnnotation(raw)
-		if err != nil {
-			return nil, nil, err
-		}
-		var data []byte
-		if exists && entry.Blob != "" {
-			data, err = os.ReadFile(filepath.Join(m.state, "blobs", entry.Blob))
-			if err != nil {
-				return nil, nil, err
-			}
-			if digest(data) != entry.Blob {
-				return nil, nil, diag.New("integrity", "mirror.cache", "cached content digest mismatch", nil)
-			}
-			m.summary.Reused++
-		} else if rev.State == "dead" {
-			data = annotated
-			m.summary.Downloaded++
-		} else {
-			data, err = m.source.fetch(ctx, rev)
-			if err != nil {
-				return nil, nil, err
-			}
-			m.summary.Downloaded++
-		}
-		normalized := data
-		if len(data) > 0 && data[len(data)-1] != '\n' {
-			normalized = append(bytes.Clone(data), '\n')
-		}
-		if !bytes.Equal(normalized, annotated) {
-			return nil, nil, diag.New("integrity", "mirror.annotate", "annotation differs from exact revision bytes", nil, "path_hex", hexBytes(rev.Path), "revision", rev.Number)
-		}
-		if !entry.Annotated {
-			if err = m.saveAnnotatedEntry(rev, data, raw, true); err != nil {
-				return nil, nil, err
-			}
-		}
-		m.progress.update("downloaded", m.summary.Downloaded, "reused", m.summary.Reused)
-		contents[rev.Number], origins[rev.Number] = data, labels
-	}
-	// Annotation synthesizes a final newline. An unchanged unterminated line
-	// in any live version with the same origin supplies the missing boundary bit,
-	// even when other lines changed during the deletion (for example keywords).
-	for _, dead := range revisions {
-		if dead.State != "dead" {
-			continue
-		}
-		data := contents[dead.Number]
-		lines := fileLines(data)
-		if len(lines) == 0 || len(data) == 0 || data[len(data)-1] != '\n' {
-			continue
-		}
-		last := len(lines) - 1
-		for _, live := range revisions {
-			if live.State == "dead" {
-				continue
-			}
-			liveLines := fileLines(contents[live.Number])
-			matched := false
-			for i, line := range liveLines {
-				if len(line) > 0 && line[len(line)-1] != '\n' && origins[live.Number][i] == origins[dead.Number][last] && bytes.Equal(line, bytes.TrimSuffix(lines[last], []byte{'\n'})) {
-					matched = true
-					break
-				}
-			}
-			if matched {
-				contents[dead.Number] = data[:len(data)-1]
-				entry := m.entries[mirrorKey(dead)]
-				if err := m.saveAnnotatedEntry(dead, contents[dead.Number], entry.Annotation, true); err != nil {
-					return nil, nil, err
-				}
-				break
-			}
-		}
-	}
-	return contents, origins, nil
 }
 
 // Minimal administration is fixed across CVS versions and machines. In
@@ -605,12 +510,11 @@ func (m *cvsMirror) publish(ctx context.Context, staging string) error {
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0700)
 		}
-		data, err := os.ReadFile(path)
+		equal, err := mirrorFilesEqual(ctx, path, target)
 		if err != nil {
 			return err
 		}
-		old, readErr := os.ReadFile(target)
-		if readErr == nil && bytes.Equal(old, data) {
+		if equal {
 			expected, err := entry.Info()
 			if err != nil {
 				return err
@@ -629,10 +533,7 @@ func (m *cvsMirror) publish(ctx context.Context, staging string) error {
 			}
 			return nil
 		}
-		if readErr != nil && !os.IsNotExist(readErr) {
-			return readErr
-		}
-		if err := mirrorWrite(target, data); err != nil {
+		if err := mirrorCopyFile(ctx, path, target); err != nil {
 			return err
 		}
 		info, err := entry.Info()
