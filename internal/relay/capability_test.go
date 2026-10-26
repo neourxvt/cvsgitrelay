@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fixture uses the real CVS client, including its remote server protocol via
@@ -64,9 +66,17 @@ func fixtureCVS(t *testing.T, root, dir string, args ...string) []byte {
 	return out
 }
 
+var fixtureTimestamp atomic.Int64
+
 func writeFixture(t *testing.T, path string, content []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// CVS compares second-resolution working-file timestamps before content.
+	// Distinct old timestamps make rapid edits visible without sleeps.
+	stamp := time.Unix(fixtureTimestamp.Add(1), 0)
+	if err := os.Chtimes(path, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
 }
