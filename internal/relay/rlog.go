@@ -17,10 +17,16 @@ const fileSeparator = "=========================================================
 var countsPattern = regexp.MustCompile(`^total revisions: ([0-9]+);[ \t]+selected revisions: ([0-9]+)$`)
 var linesPattern = regexp.MustCompile(`^lines: \+[0-9]+ -[0-9]+$`)
 
+type rlogMapping struct{ RCSPrefix, SourcePrefix, DestinationPrefix string }
+
 // parseRlog recognizes the demonstrated GNU CVS grammar. A separator in a log
 // message is data unless it also impersonates a complete structural boundary.
 // Such extra records fail the declared count and uniqueness checks.
 func parseRlog(data []byte, prefix string) (*Inventory, error) {
+	return parseMappedRlog(data, []rlogMapping{{RCSPrefix: prefix}})
+}
+
+func parseMappedRlog(data []byte, mappings []rlogMapping) (*Inventory, error) {
 	if bytes.IndexByte(data, 0) >= 0 {
 		return nil, diag.New("parse", "rlog", "NUL in metadata output", nil)
 	}
@@ -36,12 +42,23 @@ func parseRlog(data []byte, prefix string) (*Inventory, error) {
 			return nil, parseError(pos, "expected RCS file header")
 		}
 		rcs := strings.TrimPrefix(lines[pos], "RCS file: ")
-		if !strings.HasPrefix(rcs, prefix) || !strings.HasSuffix(rcs, ",v") {
-			return nil, diag.New("parse", "rlog.parse", "RCS path does not match the configured module directory", nil,
-				"line", pos+1, "actual_rcs_path", rcs, "expected_rcs_prefix", prefix,
-				"hint", "aliases and remapped roots require explicit mapping support")
+		var mapping *rlogMapping
+		var prefixes []string
+		for i := range mappings {
+			prefixes = append(prefixes, mappings[i].RCSPrefix)
+			if strings.HasPrefix(rcs, mappings[i].RCSPrefix) {
+				if mapping != nil {
+					return nil, parseError(pos, "RCS file matches multiple module directories")
+				}
+				mapping = &mappings[i]
+			}
 		}
-		p := strings.TrimSuffix(strings.TrimPrefix(rcs, prefix), ",v")
+		if mapping == nil || !strings.HasSuffix(rcs, ",v") {
+			return nil, diag.New("parse", "rlog.parse", "RCS path does not match the configured module directory", nil,
+				"line", pos+1, "actual_rcs_path", rcs, "expected_rcs_prefixes", prefixes,
+				"hint", "file is outside the directories declared by the resolved CVS module")
+		}
+		p := strings.TrimSuffix(strings.TrimPrefix(rcs, mapping.RCSPrefix), ",v")
 		parts := strings.Split(p, "/")
 		if len(parts) > 1 && parts[len(parts)-2] == "Attic" {
 			parts = append(parts[:len(parts)-2], parts[len(parts)-1])
@@ -50,7 +67,17 @@ func parseRlog(data []byte, prefix string) (*Inventory, error) {
 		if err := validatePath(p); err != nil {
 			return nil, err
 		}
-		f := &File{Path: p, Symbols: map[string]string{}}
+		sourcePath := ""
+		if mapping.SourcePrefix != "" {
+			sourcePath = mapping.SourcePrefix + "/" + p
+		}
+		if mapping.DestinationPrefix != "" {
+			p = mapping.DestinationPrefix + "/" + p
+		}
+		if err := validatePath(p); err != nil {
+			return nil, err
+		}
+		f := &File{Path: p, SourcePath: sourcePath, Symbols: map[string]string{}}
 		pos++
 		take := func(prefix string) (string, bool) {
 			if pos >= len(lines) || !strings.HasPrefix(lines[pos], prefix) {

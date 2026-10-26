@@ -15,6 +15,7 @@ import (
 
 type Revision struct {
 	Path        string
+	SourcePath  string
 	Number      string
 	Author      string
 	State       string
@@ -28,6 +29,7 @@ type Revision struct {
 
 type File struct {
 	Path          string
+	SourcePath    string
 	Head          string
 	DefaultBranch string
 	Symbols       map[string]string
@@ -35,6 +37,7 @@ type File struct {
 }
 
 type Inventory struct {
+	Layout    []ModuleMapping
 	Files     map[string]*File
 	Revisions map[string]*Revision
 	Ordered   []*Revision
@@ -118,6 +121,7 @@ func buildInventory(files []*File) (*Inventory, error) {
 				return nil, diag.New("unsupported", "inventory", "unsupported CVS revision numbering", err, "path_hex", hexBytes(f.Path), "revision", r.Number)
 			}
 			r.Path = f.Path
+			r.SourcePath = f.SourcePath
 			r.Line = r.Number[:strings.LastIndexByte(r.Number, '.')]
 			if len(n) == 2 {
 				r.Line = "trunk"

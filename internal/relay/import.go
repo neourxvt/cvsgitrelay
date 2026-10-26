@@ -153,6 +153,9 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if err := opts.hit("scan-complete"); err != nil {
 		return Summary{}, err
 	}
+	// Publish the resolved layout with the next source revision, never as an
+	// independent cursor. A failed or read-only scan cannot pin new state.
+	r.Manifest.Layout = slices.Clone(in.Layout)
 	s := summarize("sync", opts.Scope, in, imports, r.Manifest.Refs)
 	r.Runner.Log.Info("sync inventory", "scope", opts.Scope, "files", s.Files, "discovered", s.Discovered, "imported", s.Imported, "pending", s.Pending, "nontrunk", s.Nontrunk, "unimported", s.Unimported)
 	lastProgress := time.Now()

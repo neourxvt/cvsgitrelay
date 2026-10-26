@@ -45,6 +45,7 @@ type Manifest struct {
 	ConfigHash string                       `json:"config_hash"`
 	Refs       map[string]string            `json:"refs"`
 	Members    map[string]map[string]string `json:"members"` // path keys are hex
+	Layout     []ModuleMapping              `json:"module_layout,omitempty"`
 }
 
 type Repository struct {

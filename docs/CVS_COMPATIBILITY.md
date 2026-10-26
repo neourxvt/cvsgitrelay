@@ -12,9 +12,24 @@ revisions, static tags, absent commit IDs, multiline messages containing a
 separator, and exact single-file `checkout -n -p -kb -r NUMBER` retrieval of NUL,
 CRLF, non-UTF-8 bytes and keyword-looking content. Spaces in filenames work.
 
-Compatibility is deliberately limited to literal repository directory modules.
-RCS paths must match the repository directory from CVSROOT plus that literal
-module. Aliases, module options and server-side path remapping are rejected.
+Supported module layouts are literal repository directories and directory
+aliases composed of `-a` aliases and regular directory modules with optional
+`-d` destinations. They must have a root directory at the requested module and
+place all included directories beneath it. File selections, exclusions, hooks,
+ampersand modules, overlapping source directories and unexplained server-side
+path remapping are rejected.
+
+`checkout -c` provides the definitions used to map physical RCS paths into Git
+checkout paths. The definitions are resolved before and after discovery; the
+layout is pinned in the Git checkpoint on the first import. Exact numeric
+retrieval uses each file's physical repository path, since a composite alias
+path can unexpectedly expand to several files even with `checkout -p`.
+
+The public Schmorp module listing is captured in `testdata/schmorp-modules.txt`.
+It defines `rxvt-unicode` as the main tree plus `libev` and `libecb`, mounted in
+the corresponding subdirectories. A local remote-protocol fixture demonstrates
+complete discovery, exact binary retrieval, independent trunk/vendor checkout
+verification, restart/no-op behavior, and rejection of later alias remapping.
 Only a terminal Attic component is removed. Newline, carriage return, tab and
 NUL in paths cannot be represented unambiguously by this rlog dialect and are
 rejected. Other POSIX path bytes are retained, with hex encoding in provenance.

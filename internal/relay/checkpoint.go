@@ -61,6 +61,11 @@ func (r *Repository) readCheckpoint(ctx context.Context, oid string) (string, Ma
 			return "", m, diag.New("integrity", "checkpoint.read", "invalid managed ref entry", nil, "commit", oid, "ref", ref)
 		}
 	}
+	if len(m.Layout) > 0 {
+		if err := validateMappings(m.Layout); err != nil {
+			return "", m, err
+		}
+	}
 	return parent, m, nil
 }
 
@@ -80,6 +85,9 @@ func (r *Repository) validateCheckpoints(ctx context.Context) error {
 			return err
 		}
 		if child != nil {
+			if (len(m.Layout) > 0 && !sameMappings(m.Layout, child.Layout)) || (len(m.Layout) == 0 && len(m.Refs) > 0 && len(child.Layout) > 0 && !sameMappings(child.Layout, literalMapping(r.Config.Module))) {
+				return diag.New("integrity", "checkpoint.walk", "published module layout was changed", nil, "commit", oid)
+			}
 			changed := ""
 			for ref, old := range m.Refs {
 				if child.Refs[ref] == "" {

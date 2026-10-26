@@ -44,3 +44,21 @@ the default vendor setting; that mutable observation is not compared as old
 revision metadata. Revision destinations and source authors/times/logs remain
 immutable. The supported named branch tips, including vendor lines, are checked
 against separate CVS working checkouts.
+
+## CVS directory aliases
+
+CVS module aliases can compose a project from directories elsewhere in the
+repository. The configured module names the project checkout; `rlog` still
+names each physical RCS archive. A resolved layout therefore maps repository
+directories to checkout destinations, while each revision retains its physical
+file path for exact retrieval. Taking only an RCS basename or fetching through
+the composite checkout path would lose this distinction and can select the
+wrong file or concatenate multiple files.
+
+The supported subset is directory aliases (`-a`) and regular directory modules
+with optional destinations (`-d`). Resolve the actual `checkout -c` listing,
+reject cycles and ambiguous layouts, and require the same layout after the
+metadata scan. Pin that layout in the same Git transaction as the first import.
+Existing literal mirrors have an implicit literal mapping and remain readable;
+their published histories cannot be reinterpreted as composite layouts.
+The import commit schema and existing source configuration remain compatible.

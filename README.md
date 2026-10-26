@@ -16,7 +16,12 @@ go build ./cmd/cvsgitrelay
 ./cvsgitrelay verify --repo ./mirror.git --mode tip
 ```
 
-Use a literal repository directory module. Configure authentication through CVS
+Use a literal repository directory module or a supported directory alias.
+Directory aliases may combine `-a` definitions with `-d` destinations under the
+requested checkout root. The resolved source/destination layout is pinned in
+the Git checkpoint with the first imported revision; later mapping changes
+fail visibly. File selections, exclusions, checkout hooks and ampersand modules
+are unsupported. Configure authentication through CVS
 facilities; passwords embedded in CVSROOT are rejected. Source settings live in
 `mirror.git/cvsgitrelay.json`, mode 0600, and are pinned by a fingerprint in Git.
 The dedicated destination must initially be an empty bare SHA-1 repository.

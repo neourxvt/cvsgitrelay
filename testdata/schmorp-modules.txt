@@ -1,0 +1,13 @@
+Coro         -a Coro_ Coro/Coro/libcoro
+Coro/Coro/libcoro -d Coro/Coro/libcoro libcoro
+Coro_        -d Coro Coro
+EV           -a EV_ EV/libev
+EV/libev     -d EV/libev libev
+EV_          -d EV EV
+IO-AIO       -a IO-AIO_ IO-AIO/libeio
+IO-AIO/libeio -d IO-AIO/libeio libeio
+IO-AIO_      -d IO-AIO IO-AIO
+rxvt-unicode -a rxvt-unicode_ rxvt-unicode/libev rxvt-unicode/libecb
+rxvt-unicode/libecb -d rxvt-unicode/libecb libecb
+rxvt-unicode/libev -d rxvt-unicode/libev libev
+rxvt-unicode_ -d rxvt-unicode rxvt-unicode

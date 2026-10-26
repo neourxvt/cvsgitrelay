@@ -71,6 +71,8 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 
 func inventoryFingerprint(in *Inventory) string {
 	var b strings.Builder
+	b.WriteString(mappingFingerprint(in.Layout))
+	b.WriteByte('\n')
 	paths := make([]string, 0, len(in.Files))
 	for path := range in.Files {
 		paths = append(paths, path)
@@ -90,7 +92,7 @@ func inventoryFingerprint(in *Inventory) string {
 		b.WriteByte('\n')
 	}
 	for _, r := range in.Ordered {
-		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00", r.Path, r.Number, r.Author, r.Time, r.State, r.Ref, r.CommitID, digest(r.Log))
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00", r.Path, r.SourcePath, r.Number, r.Author, r.Time, r.State, r.Ref, r.CommitID, digest(r.Log))
 	}
 	return digest([]byte(b.String()))
 }
@@ -127,11 +129,11 @@ func (r *Repository) compareCheckout(ctx context.Context, ref, symbol string) er
 		return err
 	}
 	defer os.RemoveAll(dir)
-	if _, err := r.cvs(ctx, dir, "checkout", "-n", "-kb", "-r", symbol, "-d", "tree", r.Config.Module); err != nil {
+	if _, err := r.cvs(ctx, dir, "checkout", "-n", "-kb", "-r", symbol, r.Config.Module); err != nil {
 		return err
 	}
 	want := map[string]string{}
-	base := filepath.Join(dir, "tree")
+	base := filepath.Join(dir, r.Config.Module)
 	if err := filepath.WalkDir(base, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
