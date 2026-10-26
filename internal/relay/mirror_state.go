@@ -320,6 +320,9 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	if err != nil {
 		return summary, err
 	}
+	if err = readMirrorCommitIDs(staging, copied); err != nil {
+		return summary, err
+	}
 	if !reflect.DeepEqual(before, copied) {
 		return summary, diag.New("integrity", "mirror.compare", "generated CVS history differs from source metadata", nil)
 	}

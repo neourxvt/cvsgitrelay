@@ -13,6 +13,66 @@ import (
 	"cvsgitrelay/internal/process"
 )
 
+// Simulate a newer remote server and an older local client independently of
+// the installed CVS version. Mirroring must preserve IDs the local rlog hides.
+func TestMirrorPreservesCommitIDsOmittedByLocalRlog(t *testing.T) {
+	root, _, _ := fixture(t)
+	cvs, err := exec.LookPath("cvs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	// Strip any native IDs from both dialects, then expose stable IDs only for
+	// source scans. Generated archive headers retain the IDs for verification.
+	wrapper := `#!/bin/sh
+source_scan=false
+rlog=false
+for argument do
+    case "$argument" in
+        "$CVSGITRELAY_TEST_SOURCE") source_scan=true ;;
+        rlog) rlog=true ;;
+    esac
+done
+if "$rlog"; then
+    if "$source_scan"; then
+        id_filter='s/;*$/;  commitid: mirrorRegression;/'
+    else
+        id_filter=''
+    fi
+    metadata=$("$CVSGITRELAY_TEST_CVS" "$@") || exit $?
+    printf '%s\n' "$metadata" | sed "/^date: /{s/;[[:space:]]*commitid: [^;]*;/;/g;$id_filter;}"
+else
+    exec "$CVSGITRELAY_TEST_CVS" "$@"
+fi
+`
+	if err := os.WriteFile(filepath.Join(bin, "cvs"), []byte(wrapper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CVSGITRELAY_TEST_CVS", cvs)
+	t.Setenv("CVSGITRELAY_TEST_SOURCE", ":fork:"+root)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	runner := &process.Runner{Log: process.DiscardLogger(), Timeout: 10 * time.Second, MaxOutput: 16 << 20}
+	output := filepath.Join(t.TempDir(), "mirror")
+	summary, err := Mirror(context.Background(), runner, ":fork:"+root, "module", output, false, Options{Connections: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Revisions == 0 {
+		t.Fatal("mirror imported no revisions")
+	}
+	// Cover ordinary, removed, and administrative archives, rather than merely
+	// accepting a successful comparison that discarded the source commit IDs.
+	for _, path := range []string{"module/active,v", "module/Attic/removed,v", "CVSROOT/modules,v"} {
+		archive, err := os.ReadFile(filepath.Join(output, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(archive), "\ncommitid mirrorRegression;\n") {
+			t.Fatalf("source commit ID missing from %s", path)
+		}
+	}
+}
+
 // A final metadata failure must preserve the expensive downloads and generated
 // archives, including across another failed attempt, so a retry can reuse them.
 func TestMirrorRetainsWorkOnFinalComparisonFailure(t *testing.T) {

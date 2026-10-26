@@ -1,12 +1,57 @@
 package relay
 
 import (
+	"bufio"
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"cvsgitrelay/internal/diag"
 )
+
+// Older local CVS versions omit commit IDs from rlog even when the archive
+// contains them. Read only our generated headers, stopping before description
+// and deltatext strings, so the final comparison still verifies preserved IDs.
+func readMirrorCommitIDs(root string, in *Inventory) error {
+	for _, file := range in.Files {
+		if err := readMirrorFileCommitIDs(filepath.Join(root, mirrorArchivePath(file)), in, file.Path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readMirrorFileCommitIDs(path string, in *Inventory, filePath string) error {
+	archive, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	reader := bufio.NewReader(archive)
+	var revision *Revision
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return diag.New("integrity", "mirror.compare", "cannot read generated CVS archive headers", err, "path_hex", hexBytes(filePath))
+		}
+		line = strings.TrimSuffix(line, "\n")
+		if line == "desc" {
+			return nil
+		}
+		if number, err := numbers(line); err == nil && len(number)%2 == 0 {
+			revision = in.Revisions[key(filePath, line)]
+		}
+		if strings.HasPrefix(line, "commitid ") {
+			id := strings.TrimSuffix(strings.TrimPrefix(line, "commitid "), ";")
+			if revision == nil || !strings.HasSuffix(line, ";") || !rcsIdentifier(id) || (revision.CommitID != "" && revision.CommitID != id) {
+				return diag.New("integrity", "mirror.compare", "generated CVS commit ID differs from reported metadata", nil, "path_hex", hexBytes(filePath))
+			}
+			revision.CommitID = id
+		}
+	}
+}
 
 // Mirror identities use physical source paths, avoiding collisions between a
 // module's checkout names and the repository-wide administrative directory.
