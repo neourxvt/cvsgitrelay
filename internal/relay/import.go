@@ -15,6 +15,7 @@ import (
 
 type Options struct {
 	Scope            string
+	Connections      int
 	Mode             string
 	Failpoint        string
 	ProgressInterval time.Duration
@@ -153,6 +154,12 @@ func (r *Repository) Status(ctx context.Context, scope string) (Summary, error) 
 }
 
 func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
+	if opts.Connections == 0 {
+		opts.Connections = 4
+	}
+	if opts.Connections < 1 {
+		return Summary{}, diag.New("usage", "sync.configure", "CVS connection limit must be positive", nil)
+	}
 	if err := opts.hit("scan-start"); err != nil {
 		return Summary{}, err
 	}
@@ -168,43 +175,31 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	r.Manifest.Layout = slices.Clone(in.Layout)
 	r.Manifest.Submodules = in.Submodules
 	s := summarize("sync", opts.Scope, in, imports, r.Manifest.Refs)
-	r.Runner.Log.Info("sync inventory", "scope", opts.Scope, "submodules", s.Submodules, "excluded_modules", s.ExcludedModules, "excluded_files", s.ExcludedFiles, "excluded_revisions", s.ExcludedRevisions, "files", s.Files, "discovered", s.Discovered, "imported", s.Imported, "pending", s.Pending, "nontrunk", s.Nontrunk, "unimported", s.Unimported)
+	r.Runner.Log.Info("sync inventory", "scope", opts.Scope, "connections", opts.Connections, "submodules", s.Submodules, "excluded_modules", s.ExcludedModules, "excluded_files", s.ExcludedFiles, "excluded_revisions", s.ExcludedRevisions, "files", s.Files, "discovered", s.Discovered, "imported", s.Imported, "pending", s.Pending, "nontrunk", s.Nontrunk, "unimported", s.Unimported)
 	lastProgress := time.Now()
-	pending := slices.Clone(in.Ordered)
-	for len(pending) > 0 {
-		advanced := false
-		for i, rev := range pending {
-			if imports[key(rev.Path, rev.Number)] != nil || (opts.Scope == "trunk" && rev.Line != "trunk") {
-				pending = slices.Delete(pending, i, i+1)
-				advanced = true
-				break
-			}
-			if rev.Predecessor != "" && imports[key(rev.Path, rev.Predecessor)] == nil {
-				continue
-			}
-			ready, err := r.prepareBranch(ctx, rev.Ref, in, imports, &opts)
-			if err != nil {
-				return Summary{}, err
-			}
-			if !ready {
-				continue
-			}
-			c, err := r.importRevision(ctx, rev, in.Files[rev.Path], &opts)
-			if err != nil {
-				return Summary{}, diag.New(diag.Code(err), "sync.revision", "revision import stopped; rerun sync after resolving the cause", err, "path_hex", hexBytes(rev.Path), "revision", rev.Number, "ref", rev.Ref, "published_this_run", s.Published)
-			}
-			imports[key(rev.Path, rev.Number)] = c
-			s.Published++
-			if opts.ProgressInterval > 0 && time.Since(lastProgress) >= opts.ProgressInterval {
-				r.Runner.Log.Info("sync progress", "published", s.Published, "pending", s.Pending-s.Published, "path_hex", hexBytes(rev.Path), "revision", rev.Number, "ref", rev.Ref)
-				lastProgress = time.Now()
-			}
-			pending = slices.Delete(pending, i, i+1)
-			advanced = true
-			break
+	pending, err := r.pendingRevisions(in, imports, opts.Scope)
+	if err != nil {
+		return Summary{}, err
+	}
+	fetches := newRevisionFetches(ctx, pending, opts.Connections, r.fetch)
+	defer fetches.close()
+	for _, rev := range pending {
+		ready, err := r.prepareBranch(ctx, rev.Ref, in, imports, &opts)
+		if err != nil {
+			return Summary{}, err
 		}
-		if !advanced {
-			return Summary{}, diag.New("integrity", "sync.order", "unresolvable ancestry dependencies", nil, "pending", len(pending))
+		if !ready {
+			return Summary{}, diag.New("integrity", "sync.order", "unresolved branch seed dependencies", nil, "ref", rev.Ref)
+		}
+		c, err := r.importRevision(ctx, rev, in.Files[rev.Path], &opts, fetches)
+		if err != nil {
+			return Summary{}, diag.New(diag.Code(err), "sync.revision", "revision import stopped; rerun sync after resolving the cause", err, "path_hex", hexBytes(rev.Path), "revision", rev.Number, "ref", rev.Ref, "published_this_run", s.Published)
+		}
+		imports[key(rev.Path, rev.Number)] = c
+		s.Published++
+		if opts.ProgressInterval > 0 && time.Since(lastProgress) >= opts.ProgressInterval {
+			r.Runner.Log.Info("sync progress", "published", s.Published, "pending", s.Pending-s.Published, "path_hex", hexBytes(rev.Path), "revision", rev.Number, "ref", rev.Ref)
+			lastProgress = time.Now()
 		}
 	}
 	if opts.Scope == "all" {
@@ -217,13 +212,59 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	return final, nil
 }
 
-func (r *Repository) importRevision(ctx context.Context, rev *Revision, file *File, opts *Options) (*Imported, error) {
+// pendingRevisions plans the same first-ready order used for publication,
+// including every forkpoint needed to seed a branch. Only planning state is
+// advanced here; fetch completion never establishes a published dependency.
+func (r *Repository) pendingRevisions(in *Inventory, imports map[string]*Imported, scope string) ([]*Revision, error) {
+	known := make(map[string]bool, len(imports))
+	for k := range imports {
+		known[k] = true
+	}
+	seeded := map[string]bool{trunkRef: true}
+	for ref, oid := range r.Manifest.Refs {
+		seeded[ref] = oid != ""
+	}
+	var remaining, ordered []*Revision
+	for _, rev := range in.Ordered {
+		if !known[key(rev.Path, rev.Number)] && (scope != "trunk" || rev.Line == "trunk") {
+			remaining = append(remaining, rev)
+		}
+	}
+	for len(remaining) > 0 {
+		i := slices.IndexFunc(remaining, func(rev *Revision) bool {
+			if rev.Predecessor != "" && !known[key(rev.Path, rev.Predecessor)] {
+				return false
+			}
+			if !seeded[rev.Ref] {
+				for path, fork := range in.Branches[rev.Ref] {
+					if !known[key(path, fork)] {
+						return false
+					}
+				}
+			}
+			return true
+		})
+		if i < 0 {
+			return nil, diag.New("integrity", "sync.order", "unresolvable ancestry dependencies", nil, "pending", len(remaining))
+		}
+		rev := remaining[i]
+		ordered = append(ordered, rev)
+		known[key(rev.Path, rev.Number)] = true
+		seeded[rev.Ref] = true
+		remaining = slices.Delete(remaining, i, i+1)
+	}
+	return ordered, nil
+}
+
+func (r *Repository) importRevision(ctx context.Context, rev *Revision, file *File, opts *Options, fetches *revisionFetches) (*Imported, error) {
 	blob := "-"
 	if rev.State != "dead" {
+		// Fault counters stay on the publisher goroutine. Fetch hooks bracket
+		// consumption of read-ahead bytes, which may already be available.
 		if err := opts.hit("fetch-start"); err != nil {
 			return nil, err
 		}
-		data, err := r.fetch(ctx, rev)
+		data, err := fetches.next()
 		if err != nil {
 			return nil, err
 		}

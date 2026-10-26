@@ -30,6 +30,7 @@ type cliOptions struct {
 	submodules                  string
 	requireConsecutiveRevisions bool
 	scope                       string
+	connections                 int
 	mode                        string
 	logFormat                   string
 	logLevel                    string
@@ -105,6 +106,7 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 	flags.IntVar(&options.maxOutput, "max-output", 256<<20, "override process.max_output")
 	flags.DurationVar(&options.progressInterval, "progress-interval", 15*time.Second, "override logging.progress_interval; zero disables progress")
 	if operation == "sync" {
+		flags.IntVar(&options.connections, "connections", 2, "override sync.connections: maximum concurrent CVS revision fetches")
 		flags.StringVar(&options.failpoint, "failpoint", "", "override debug.failpoint: [kill:]STAGE[:ORDINAL]")
 	}
 	if operation == "verify" {
@@ -158,6 +160,8 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			cfg.Source.RequireConsecutiveRevisions = options.requireConsecutiveRevisions
 		case "scope":
 			cfg.Sync.Scope = options.scope
+		case "connections":
+			cfg.Sync.Connections = options.connections
 		case "mode":
 			cfg.Verify.Mode = options.mode
 		case "log-format":
@@ -217,7 +221,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			repository.RequireConsecutiveRevisions = cfg.Source.RequireConsecutiveRevisions
 			switch operation {
 			case "sync":
-				summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint})
+				summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint})
 			case "status":
 				summary, err = repository.Status(ctx, cfg.Sync.Scope)
 			case "verify":

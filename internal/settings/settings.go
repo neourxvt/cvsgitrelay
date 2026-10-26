@@ -38,7 +38,8 @@ type Destination struct {
 	Repo string `toml:"repo"`
 }
 type Sync struct {
-	Scope string `toml:"scope"`
+	Scope       string `toml:"scope"`
+	Connections int    `toml:"connections"`
 }
 type Verify struct {
 	Mode string `toml:"mode"`
@@ -60,7 +61,7 @@ type Process struct {
 }
 
 func defaults() Config {
-	return Config{Source: Source{Submodules: "exclude"}, Sync: Sync{Scope: "all"}, Verify: Verify{Mode: "metadata"},
+	return Config{Source: Source{Submodules: "exclude"}, Sync: Sync{Scope: "all", Connections: 4}, Verify: Verify{Mode: "metadata"},
 		Logging: Logging{Format: "text", Level: "info", ErrorStacks: true, ProgressInterval: "15s"},
 		Process: Process{CommandTimeout: "5m", MaxOutput: 256 << 20}}
 }
@@ -134,6 +135,9 @@ func (c Config) Validate() error {
 	}
 	if c.Sync.Scope != "all" && c.Sync.Scope != "trunk" {
 		return invalid("sync.scope", "choose all or trunk")
+	}
+	if c.Sync.Connections < 1 {
+		return invalid("sync.connections", "CVS connection limit must be positive")
 	}
 	if c.Verify.Mode != "metadata" && c.Verify.Mode != "deep" && c.Verify.Mode != "tip" {
 		return invalid("verify.mode", "choose metadata, deep or tip")

@@ -62,6 +62,15 @@ and revisions with identical content. Files use mode 100644 and `-kb` retrieval.
 CVS authors are preserved as hex metadata and shown as escaped ASCII Git names.
 CVS timestamps use UTC. No changeset grouping or historical Git tags are inferred.
 
+Sync fetches revision contents through up to four concurrent CVS connections
+by default. Set `sync.connections` in TOML or pass `--connections N` to change
+the positive limit; use `1` for one connection. Fetches use a bounded read-ahead
+window, so increasing the limit also increases memory used for file contents.
+Git commits and checkpoints are published serially in dependency order;
+concurrent fetch completion does not change commit order. Metadata discovery
+and verification remain sequential. Failed or interrupted syncs cancel and
+wait for outstanding fetches before returning.
+
 Trunk imports target `refs/heads/cvs/trunk`. Full metadata discovery occurs on
 every run. Numbering gaps already present in CVS's listed history produce a
 warning; accessible revisions are linked in numeric order without inventing

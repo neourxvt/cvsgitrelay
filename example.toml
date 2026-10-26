@@ -49,6 +49,12 @@ repo = "./git-rxvt-unicode"
 # CLI override: --scope (also applies to status and verify)
 scope = "all"
 
+# Maximum simultaneous CVS revision fetches. Must be positive; 1 uses one
+# connection. Git commits and checkpoints are still published in order.
+# The read-ahead window is bounded by this limit; increasing it also increases
+# memory use for fetched contents. CLI override: --connections
+connections = 2
+
 [verify]
 # "metadata" (default): compare identities, metadata, trees and ancestry.
 # "deep": also retrieve and hash every imported live revision and check objects.
