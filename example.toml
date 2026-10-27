@@ -115,6 +115,11 @@ failpoint = ""
 # initialized; a different map requires a new destination.
 # root = "Root User <root@example.com>"
 # "j.doe" = "Jane Doe <jane@example.com>"
+# The special key "<relay>" names the identity of commits the relay makes itself,
+# for which CVS has no author: trunk and branch starts and tag snapshots (author
+# and committer), and the committer of every revision. The default is
+# "CVSGITRELAY <relay@invalid>".
+# "<relay>" = "Release Bot <bot@example.com>"
 
 [branches]
 # Optional map selecting and renaming the CVS branches published as Git

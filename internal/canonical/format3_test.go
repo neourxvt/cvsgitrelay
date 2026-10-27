@@ -395,3 +395,66 @@ func TestV3SyntheticCommitsAreDatedFromData(t *testing.T) {
 		}
 	}
 }
+
+// The author map entry for the relay identity signs the commits the relay
+// makes: line starts and tags as author and committer, events as committer.
+// Anchor and state commits keep the fixed internal identity.
+func TestV3RelayIdentity(t *testing.T) {
+	const bot = "Release Bot <bot@example.com>"
+	p := policy3()
+	p.Authors[RelayAuthor] = bot
+	in := fixtureInventory3()
+	g, e := Build(in, p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	events := map[string]bool{}
+	for _, entry := range g.Manifest.Revisions {
+		events[entry.Event] = true
+	}
+	for oid, o := range g.Objects {
+		if o.Kind != "commit" {
+			continue
+		}
+		head, _, _ := bytes.Cut(o.Data, []byte("\n\n"))
+		var author, committer string
+		for _, line := range strings.Split(string(head), "\n") {
+			if rest, ok := strings.CutPrefix(line, "author "); ok {
+				author = rest[:strings.Index(rest, "> ")+1]
+			}
+			if rest, ok := strings.CutPrefix(line, "committer "); ok {
+				committer = rest[:strings.Index(rest, "> ")+1]
+			}
+		}
+		switch msg := commitMessage(t, g, oid); {
+		case events[oid]:
+			if committer != bot || author == bot {
+				t.Errorf("event signed by %q, authored by %q", committer, author)
+			}
+		case strings.HasPrefix(msg, "cvsgitrelay-"):
+			if author != Identity || committer != Identity {
+				t.Errorf("internal commit %q signed by %q", msg, committer)
+			}
+		default:
+			if author != bot || committer != bot {
+				t.Errorf("commit %q signed by %q/%q", msg, author, committer)
+			}
+		}
+	}
+	// Without the entry the fixed identity stays, and the entry changes the policy.
+	plain, e := Build(in, policy3())
+	if e != nil {
+		t.Fatal(e)
+	}
+	if plain.Manifest.PolicyDigest == g.Manifest.PolicyDigest || p.Relay() != bot || policy3().Relay() != Identity {
+		t.Fatal("relay identity not part of the policy")
+	}
+	// A revision by a CVS user with the reserved name is ambiguous.
+	in.Records[0].Author = RelayAuthor
+	if _, e := Build(in, p); e == nil {
+		t.Fatal("reserved username accepted")
+	}
+	if _, e := Build(in, policy3()); e != nil {
+		t.Fatalf("reserved name only matters when mapped: %v", e)
+	}
+}

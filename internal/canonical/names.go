@@ -118,3 +118,21 @@ func tagTime(selected []Record) int64 {
 	}
 	return t
 }
+
+// RelayAuthor is the key of the author map that names the identity of the
+// commits the relay makes itself. A CVS username cannot be mistaken for it
+// because Build rejects revisions by an author with this name.
+const RelayAuthor = "<relay>"
+
+// Relay returns the identity that signs the commits made by the relay: the
+// line starts and tags (as author and committer) and every revision event (as
+// committer). Format 3 takes it from the author map; otherwise it is fixed.
+// Anchor and state commits are internal and always use Identity.
+func (p Policy) Relay() string {
+	if p.Version() == 3 {
+		if identity, ok := p.Authors[RelayAuthor]; ok {
+			return identity
+		}
+	}
+	return Identity
+}

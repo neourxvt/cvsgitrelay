@@ -102,13 +102,13 @@ func (o Objects) Tree(files map[string]string) (string, error) {
 	return emit(root), nil
 }
 
-func CommitBytes(tree string, parents []string, author string, timestamp int64, message []byte) []byte {
+func CommitBytes(tree string, parents []string, author, committer string, timestamp int64, message []byte) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "tree %s\n", tree)
 	for _, p := range parents {
 		fmt.Fprintf(&b, "parent %s\n", p)
 	}
-	fmt.Fprintf(&b, "author %s %d +0000\ncommitter %s %d +0000\n\n", author, timestamp, Identity, timestamp)
+	fmt.Fprintf(&b, "author %s %d +0000\ncommitter %s %d +0000\n\n", author, timestamp, committer, timestamp)
 	b.Write(message)
 	return b.Bytes()
 }
@@ -119,7 +119,12 @@ func (o Objects) Synthetic(tree string, parents []string, message string) string
 // SyntheticAt is Synthetic with an explicit timestamp, which format 3 takes
 // from the source data instead of using the fixed one.
 func (o Objects) SyntheticAt(tree string, parents []string, message string, timestamp int64) string {
-	return o.Put("commit", CommitBytes(tree, parents, Identity, timestamp, []byte(message)))
+	return o.SyntheticAs(Identity, tree, parents, message, timestamp)
+}
+
+// SyntheticAs is SyntheticAt with the identity that signs the commit.
+func (o Objects) SyntheticAs(identity, tree string, parents []string, message string, timestamp int64) string {
+	return o.Put("commit", CommitBytes(tree, parents, identity, identity, timestamp, []byte(message)))
 }
 
 // RevisionMessage encodes a revision event message in the policy's format.
@@ -268,7 +273,7 @@ func (p Policy) EventAuthor(author string) string {
 }
 
 func (o Objects) Event(p Policy, r Record, tree, parent string) string {
-	return o.Put("commit", CommitBytes(tree, []string{parent}, p.EventAuthor(r.Author), r.Time, p.RevisionMessage(r)))
+	return o.Put("commit", CommitBytes(tree, []string{parent}, p.EventAuthor(r.Author), p.Relay(), r.Time, p.RevisionMessage(r)))
 }
 
 // Anchor bounds fan-in without allowing input discovery order into parent lists.

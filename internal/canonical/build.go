@@ -46,6 +46,13 @@ func Build(input Inventory, p Policy) (Generation, error) {
 	if err != nil {
 		return Generation{}, err
 	}
+	if _, named := p.Authors[RelayAuthor]; named && p.Version() == 3 {
+		for _, r := range in.Records {
+			if r.Author == RelayAuthor {
+				return Generation{}, fmt.Errorf("the CVS username %q is reserved for the relay identity in the author map", RelayAuthor)
+			}
+		}
+	}
 	g := Generation{Objects: Objects{}, Manifest: Manifest{Source: p.Source, PolicyDigest: p.Digest(), SourceDigest: in.Digest(p.Source), Verify: p.Verify, Revisions: map[string]RevisionEntry{}, Lines: map[string]string{}, Refs: map[string]string{}}}
 	records := map[string]Record{}
 	flines := map[string]*fileLine{}
@@ -198,7 +205,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				if p.Version() == 3 {
 					message, when = p.lineMessage(line), lineTime(line)
 				}
-				parent = g.Objects.SyntheticAt(files.oid(), nil, message, when)
+				parent = g.Objects.SyntheticAs(p.Relay(), files.oid(), nil, message, when)
 			} else {
 				var anchor *Record
 				var pairs []string
@@ -233,7 +240,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				if anchorOID == "" {
 					return Generation{}, fmt.Errorf("unresolved seed anchor")
 				}
-				parent = g.Objects.SyntheticAt(files.oid(), []string{anchorOID}, message, when)
+				parent = g.Objects.SyntheticAs(p.Relay(), files.oid(), []string{anchorOID}, message, when)
 			}
 			var pending []Record
 			for _, f := range line.members {
@@ -339,7 +346,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		if p.Version() == 3 {
 			message, when = p.tagMessage(name), tagTime(selected)
 		}
-		oid := g.Objects.SyntheticAt(tree, nil, message, when)
+		oid := g.Objects.SyntheticAs(p.Relay(), tree, nil, message, when)
 		ref, e := p.TagRef(name)
 		if e != nil {
 			return Generation{}, e

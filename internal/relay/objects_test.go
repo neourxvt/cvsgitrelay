@@ -98,7 +98,7 @@ func TestFormat3EventsVerify(t *testing.T) {
 		t.Fatal(diag.Details(err, false))
 	}
 	policy := canonical.Policy{Source: "test-source", Module: "module", Submodules: "include", Verify: "full", Mappings: []canonical.Mapping{{Archive: "module"}},
-		Format: 3, Authors: map[string]string{"root": "Root User <root@example.com>"}}
+		Format: 3, Authors: map[string]string{"root": "Root User <root@example.com>", canonical.RelayAuthor: "Release Bot <bot@example.com>"}}
 	r := &Repository{Path: path, Runner: runner, Config: Config{Version: 3, SourceID: policy.Source, Module: policy.Module, Policy: policy}}
 	logs := []string{"Fix the build\n\nDetails.\n", "*** empty log message ***\n", "", "no newline", "bad \xff byte\n", "nul\x00\n"}
 	authors := []string{"root", "alice", "odd user"}
@@ -131,10 +131,18 @@ func TestFormat3EventsVerify(t *testing.T) {
 		t.Fatal(diag.Details(err, false))
 	}
 	// Each line starts from its synthetic root commit, which is unchanged.
-	want := "CVSGITRELAY <relay@invalid>|CVS trunk\nRoot User <root@example.com>|Fix the build\nalice <alice@cvs.invalid>|*** empty log message ***\nCVS-6f64642075736572 <cvs@invalid>|" + strings.TrimSuffix(canonical.EmptyLogText, "\n") +
+	want := "Release Bot <bot@example.com>|CVS trunk\nRoot User <root@example.com>|Fix the build\nalice <alice@cvs.invalid>|*** empty log message ***\nCVS-6f64642075736572 <cvs@invalid>|" + strings.TrimSuffix(canonical.EmptyLogText, "\n") +
 		"\nRoot User <root@example.com>|no newline\nalice <alice@cvs.invalid>|bad � byte\nCVS-6f64642075736572 <cvs@invalid>|nul�\n"
 	if string(out) != want {
 		t.Fatalf("unexpected readable history:\n%s", out)
+	}
+	// The relay identity commits every event, whoever authored it.
+	committers, err := r.git(ctx, nil, nil, "log", "--format=%cn <%ce>", tip)
+	if err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	if strings.Count(string(committers), "Release Bot <bot@example.com>\n") != len(logs)+1 || strings.Contains(string(committers), "CVSGITRELAY") {
+		t.Fatalf("unexpected committers:\n%s", committers)
 	}
 	// Git shows the whole message: the log plus one provenance line, and a
 	// further line only for the mapped author.

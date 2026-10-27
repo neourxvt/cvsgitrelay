@@ -345,7 +345,7 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 		if e != nil || rev.Key.ID() != keys[event] {
 			return fmt.Errorf("event key mismatch")
 		}
-		expected := canonical.CommitBytes(strings.TrimPrefix(lines[0], "tree "), []string{strings.TrimPrefix(lines[1], "parent ")}, r.Config.Policy.EventAuthor(rev.Author), rev.Time, message)
+		expected := canonical.CommitBytes(strings.TrimPrefix(lines[0], "tree "), []string{strings.TrimPrefix(lines[1], "parent ")}, r.Config.Policy.EventAuthor(rev.Author), r.Config.Policy.Relay(), rev.Time, message)
 		if !bytes.Equal(data, expected) {
 			return fmt.Errorf("noncanonical event header")
 		}

@@ -89,7 +89,10 @@ cannot be shown as plain text are written as `hex:...`. Tags are published as
 `..`, a trailing `.lock` or unusual bytes, is published as
 `refs/tags/cvs-raw/<hex name>` instead. These commits are signed by
 `CVSGITRELAY <relay@invalid>`, because CVS records neither who created a tag
-or branch nor when. Their date comes from the data instead: a tag is dated by
+or branch nor when. The entry `"<relay>" = "Name <email>"` in the `[authors]`
+table replaces that identity. It then signs these commits as author and
+committer, and every revision event as committer, whoever authored it. A CVS
+username `<relay>` is rejected once the entry exists. Their date comes from the data instead: a tag is dated by
 the newest revision it selects, a branch start by the newest fork point among
 its files, and the trunk start by the oldest trunk revision. Anchor and state
 commits stay hex and use the fixed date 2000-01-01, since no branch or tag
