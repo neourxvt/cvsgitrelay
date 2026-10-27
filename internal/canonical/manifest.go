@@ -91,7 +91,10 @@ func DecodeKey(b []byte) (Key, error) {
 
 // ParseManifest accepts only the exact serializer's language, including order,
 // mandatory counts, uniqueness and lowercase byte representations.
-func ParseManifest(b []byte) (Manifest, error) {
+func ParseManifest(b []byte) (Manifest, error) { return parseManifest(b, ProjectionRef) }
+
+// parseManifest parses with the given projection ref predicate.
+func parseManifest(b []byte, projection func(string) bool) (Manifest, error) {
 	m := Manifest{Revisions: map[string]RevisionEntry{}, Lines: map[string]string{}, Refs: map[string]string{}}
 	lines := strings.Split(string(b), "\n")
 	pos := 0
@@ -191,7 +194,7 @@ func ParseManifest(b []byte) (Manifest, error) {
 				}
 				m.Lines[k] = oid
 			case "P":
-				if !ProjectionRef(k) {
+				if !projection(k) {
 					return m, fmt.Errorf("invalid projection ref")
 				}
 				if _, ok := m.Refs[k]; ok {

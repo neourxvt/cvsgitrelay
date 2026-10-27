@@ -29,6 +29,9 @@ type Config struct {
 	// Authors maps CVS usernames to "Name <email>" Git identities. It is fixed
 	// when a destination is initialized.
 	Authors map[string]string `toml:"authors"`
+	// Branches selects and renames the CVS branches that become Git branches.
+	// It is fixed when a destination is initialized.
+	Branches map[string]string `toml:"branches"`
 }
 
 type Source struct {
@@ -173,6 +176,9 @@ func (c Config) Validate() error {
 		if !canonical.ValidIdentity(identity) {
 			return invalid("authors", "each identity must have the form \"Name <email>\" without angle brackets or line breaks inside")
 		}
+	}
+	if err := canonical.ValidateBranchMap(c.Branches); err != nil {
+		return invalid("branches", err.Error())
 	}
 	if c.Debug.Failpoint != "" {
 		stage, ordinal, hasOrdinal := strings.Cut(strings.TrimPrefix(c.Debug.Failpoint, "kill:"), ":")

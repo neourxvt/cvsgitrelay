@@ -90,6 +90,15 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if err != nil {
 		return Summary{}, diag.New("source", "canonical.build", "source cannot form an unambiguous canonical graph", err)
 	}
+	// A mapped branch that produced no ref is probably misspelled, since the map
+	// is fixed once the destination exists.
+	if r.Runner.Log != nil {
+		for _, name := range canonical.SortedKeys(r.Config.Policy.Branches) {
+			if ref, _, _ := r.Config.Policy.BranchRef(name); g.Manifest.Refs[ref] == "" {
+				r.Runner.Log.Warn("Mapped CVS branch does not exist in the source", "branch", name, "git_branch", r.Config.Policy.Branches[name])
+			}
+		}
+	}
 	s := r.generationSummary("sync", in)
 	previous := r.StateOID
 	if err := r.publishGeneration(ctx, g, &opts); err != nil {

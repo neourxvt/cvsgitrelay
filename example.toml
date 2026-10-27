@@ -116,6 +116,17 @@ failpoint = ""
 # root = "Root User <root@example.com>"
 # "j.doe" = "Jane Doe <jane@example.com>"
 
+[branches]
+# Optional map selecting and renaming the CVS branches published as Git
+# branches. Keys are "trunk" or a raw CVS branch name (quote names with dots),
+# values are Git branch names that must be distinct and valid for Git. Only the
+# listed branches get a refs/heads/<name> ref and HEAD follows the trunk.
+# Omit the table to publish every branch as refs/heads/cvs/b<hex name>.
+# Tags are unaffected. The map is fixed when the destination is initialized;
+# a different map requires a new destination.
+# trunk = "main"
+# "REL-9_30" = "release/9.30"
+
 # Fixed v2 profiles: exact CVS -kb bytes, mode 100644, SHA-1 Git objects, ASCII
 # provenance and manifest, complete deterministic replay, single state-ref CAS.
 # Remote Git imports require only normal CVS read access, without server files.

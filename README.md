@@ -117,6 +117,19 @@ Branches and tags are eventually reconciled projections:
 - `refs/tags/cvs/b<hex raw tag name>` for exact per-file tag snapshots
 - `refs/cvsgitrelay/lines/b<hex logical line ID>` for every line
 
+The optional `[branches]` table selects and renames the branch projections.
+Each entry maps `trunk` or a raw CVS branch name to a Git branch name, for
+example `trunk = "main"` publishes the trunk as `refs/heads/main`. Only listed
+branches get a `refs/heads/<name>` ref and no `refs/heads/cvs/` refs exist.
+Several CVS names that denote the same branch may each be mapped to their own
+Git name. `HEAD` follows the trunk, or the first Git name alphabetically if the
+trunk is not listed. Tags and line refs are unaffected, and the history of an
+unlisted branch stays in the object store, reachable from the state ref but
+without a branch ref. The map is part of the canonical policy: a different map
+requires a new destination. A listed branch that does not exist in CVS is
+reported as a warning. A CVS branch literally named `trunk` makes the map
+ambiguous and fails the sync.
+
 Ordinary refs can expose mixed generations during publication. Consistent readers
 resolve a single state OID and use every target from that manifest:
 

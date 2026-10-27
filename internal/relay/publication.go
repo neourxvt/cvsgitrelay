@@ -257,7 +257,7 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 	if err != nil {
 		return fail(err)
 	}
-	m, err := canonical.ParseManifest(data)
+	m, err := r.Config.Policy.ParseManifest(data)
 	if err != nil {
 		return fail(err)
 	}
@@ -366,7 +366,7 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 	return m, nil
 }
 
-func validateProjections(refs map[string]string, state string, expected map[string]string, allowJournal bool) error {
+func (r *Repository) validateProjections(refs map[string]string, state string, expected map[string]string, allowJournal bool) error {
 	if refs[stateRef] != state {
 		return diag.New("conflict", "refs.validate", "authoritative state changed unexpectedly", nil)
 	}
@@ -376,7 +376,7 @@ func validateProjections(refs map[string]string, state string, expected map[stri
 		}
 	}
 	for ref := range refs {
-		if !ownedNamespace(ref) || ref == stateRef || excludedOperationalRef(ref) || (allowJournal && ref == journalRef) {
+		if !r.ownedRef(ref) || ref == stateRef || excludedOperationalRef(ref) || (allowJournal && ref == journalRef) {
 			continue
 		}
 		if expected[ref] == "" {
@@ -413,7 +413,7 @@ func (r *Repository) loadCurrent(ctx context.Context) error {
 		}
 	}
 	r.openedState = false
-	if err := validateProjections(refs, refs[stateRef], m.Refs, false); err != nil {
+	if err := r.validateProjections(refs, refs[stateRef], m.Refs, false); err != nil {
 		return err
 	}
 	r.StateOID = refs[stateRef]
@@ -509,7 +509,7 @@ func (r *Repository) reconcile(ctx context.Context, i publicationIntent, journal
 			return diag.New("conflict", "recovery.state", "state or recovery evidence changed", nil)
 		}
 		for name, value := range refs {
-			if !ownedNamespace(name) || name == stateRef || name == journalRef || excludedOperationalRef(name) {
+			if !r.ownedRef(name) || name == stateRef || name == journalRef || excludedOperationalRef(name) {
 				continue
 			}
 			if _, ok := union[name]; !ok {
@@ -539,7 +539,7 @@ func (r *Repository) reconcile(ctx context.Context, i publicationIntent, journal
 	if err != nil {
 		return err
 	}
-	if err := validateProjections(refs, i.New, i.Desired, true); err != nil {
+	if err := r.validateProjections(refs, i.New, i.Desired, true); err != nil {
 		return err
 	}
 	if opts != nil {
@@ -572,7 +572,7 @@ func (r *Repository) recoverPublication(ctx context.Context) error {
 	}
 	switch refs[stateRef] {
 	case i.Old:
-		if err := validateProjections(refs, i.Old, i.Expected, true); err != nil {
+		if err := r.validateProjections(refs, i.Old, i.Expected, true); err != nil {
 			return err
 		}
 		if i.Old == "" {
@@ -612,7 +612,7 @@ func (r *Repository) publishGeneration(ctx context.Context, g canonical.Generati
 	if err != nil {
 		return err
 	}
-	if err := validateProjections(refs, r.StateOID, r.Manifest.Refs, false); err != nil {
+	if err := r.validateProjections(refs, r.StateOID, r.Manifest.Refs, false); err != nil {
 		return err
 	}
 	if g.State == r.StateOID {
@@ -657,7 +657,7 @@ func (r *Repository) publishGeneration(ctx context.Context, g canonical.Generati
 	if err != nil {
 		return err
 	}
-	if err := validateProjections(refs, r.StateOID, r.Manifest.Refs, true); err != nil {
+	if err := r.validateProjections(refs, r.StateOID, r.Manifest.Refs, true); err != nil {
 		return err
 	}
 	if err := r.evidenceCAS(ctx, stateRef, r.StateOID, g.State, r.StateOID, journal, projectionChecks(i, false)); err != nil {

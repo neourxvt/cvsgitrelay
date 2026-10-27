@@ -39,3 +39,28 @@ func TestExampleLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The branch map renames CVS branches; names with dots or slashes need quotes.
+func TestBranchMap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	write := func(branches string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(base+"[branches]\n"+branches), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("trunk = \"main\"\n\"REL-9_30\" = \"release/9.30\"\n")
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Branches["trunk"] != "main" || c.Branches["REL-9_30"] != "release/9.30" || len(c.Branches) != 2 {
+		t.Fatalf("unexpected branch map: %v", c.Branches)
+	}
+	for _, bad := range []string{"trunk = \"bad name\"\n", "trunk = \"\"\n", "trunk = \"main\"\nother = \"main\"\n", "trunk = \"a\"\nother = \"a/b\"\n", "trunk = \"main..x\"\n"} {
+		write(bad)
+		if _, err := Load(path); err == nil {
+			t.Fatalf("invalid branch map accepted: %q", bad)
+		}
+	}
+}

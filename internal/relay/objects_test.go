@@ -146,3 +146,78 @@ func TestFormat3EventsVerify(t *testing.T) {
 		t.Fatalf("unexpected message:\n%s", message)
 	}
 }
+
+// A branch map publishes only the selected, renamed branch refs outside the
+// reserved cvs/ namespace, keeps them under the divergence checks, and a
+// reopened state accepts them.
+func TestBranchMapPublication(t *testing.T) {
+	ctx := context.Background()
+	runner := testRunner()
+	path := filepath.Join(t.TempDir(), "objects.git")
+	if _, err := runner.Run(ctx, "", nil, nil, "git", "init", "--bare", "--quiet", path); err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	policy := canonical.Policy{Source: "test-source", Module: "module", Submodules: "include", Verify: "full", Mappings: []canonical.Mapping{{Archive: "module"}},
+		Format: 3, Branches: map[string]string{"trunk": "main", "dev": "feature/dev"}}
+	r := &Repository{Path: path, Runner: runner, Config: Config{Version: 3, SourceID: policy.Source, Module: policy.Module, Policy: policy}}
+	r.Manifest = emptyManifest(policy)
+	key := func(n string) canonical.Key {
+		return canonical.Key{Source: policy.Source, Archive: "module/f", Number: n}
+	}
+	record := func(n string, parent *canonical.Key, time int64) canonical.Record {
+		return canonical.Record{Key: key(n), Path: "f", Time: time, Author: "a", Log: []byte("log\n"), State: "live", Present: true, Content: []byte(n), Parent: parent}
+	}
+	first := key("1.1")
+	inventory := func(extra ...canonical.Record) canonical.Inventory {
+		in := canonical.Inventory{Records: append([]canonical.Record{record("1.1", nil, 1), record("1.1.2.1", &first, 2)}, extra...)}
+		in.Symbols = []canonical.Symbol{{Archive: "module/f", Name: "dev", Target: "1.1.2", Branch: true}, {Archive: "module/f", Name: "unselected", Target: "1.1.2", Branch: true}}
+		return in
+	}
+	publish := func(in canonical.Inventory) canonical.Generation {
+		g, err := canonical.Build(in, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.publishGeneration(ctx, g, &Options{}); err != nil {
+			t.Fatal(diag.Details(err, false))
+		}
+		return g
+	}
+	g := publish(inventory())
+	refs, err := r.allRefs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refs["refs/heads/main"] != g.Manifest.Refs["refs/heads/main"] || refs["refs/heads/main"] == "" || refs["refs/heads/feature/dev"] == "" {
+		t.Fatalf("mapped branches not published: %v", refs)
+	}
+	for ref := range refs {
+		if strings.HasPrefix(ref, "refs/heads/cvs/") {
+			t.Fatalf("unmapped ref %s published", ref)
+		}
+	}
+	// Advancing the trunk moves the renamed branch.
+	before := refs["refs/heads/main"]
+	g = publish(inventory(record("1.2", &first, 3)))
+	if refs, err = r.allRefs(ctx); err != nil || refs["refs/heads/main"] == before || refs["refs/heads/main"] != g.Manifest.Refs["refs/heads/main"] {
+		t.Fatalf("trunk branch not advanced: %v %v", refs, err)
+	}
+	// Reopening validates the mapped refs like any other projection.
+	if err := r.loadCurrent(ctx); err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	// Moving a mapped branch behind the exporter's back is detected, as is a
+	// stray ref in the branch's place.
+	if _, err := r.git(ctx, nil, nil, "update-ref", "refs/heads/main", before); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.loadCurrent(ctx); err == nil || !strings.Contains(fmt.Sprint(diag.Details(err, false)), "REF_DIVERGED") {
+		t.Fatalf("diverged mapped branch accepted: %v", err)
+	}
+	if _, err := r.git(ctx, nil, nil, "update-ref", "-d", "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.loadCurrent(ctx); err == nil {
+		t.Fatal("deleted mapped branch accepted")
+	}
+}

@@ -204,3 +204,21 @@ func TestAcceptSourceScansOfLocalMirrors(t *testing.T) {
 		t.Fatalf("scanned a mirror during its update: %d scans, %v", calls, err)
 	}
 }
+
+// Both maps are part of the destination's policy and cannot change later.
+func TestRequestedPolicyMaps(t *testing.T) {
+	r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: "full", Format: 3, Authors: map[string]string{"a": "A <a@x>"}, Branches: map[string]string{"trunk": "main"}}}}
+	if err := r.ValidateRequestedPolicy("s", "full", map[string]string{"a": "A <a@x>"}, map[string]string{"trunk": "main"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, branches := range []map[string]string{nil, {}, {"trunk": "master"}, {"trunk": "main", "x": "y"}} {
+		if err := r.ValidateRequestedPolicy("s", "full", map[string]string{"a": "A <a@x>"}, branches); err == nil {
+			t.Fatalf("branch map %v accepted", branches)
+		}
+	}
+	// A destination without a map treats nil and an empty table alike.
+	r.Config.Policy.Branches = nil
+	if err := r.ValidateRequestedPolicy("s", "full", map[string]string{"a": "A <a@x>"}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+}

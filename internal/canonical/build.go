@@ -269,15 +269,24 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				return Generation{}, e
 			}
 			g.Manifest.Refs[ref] = parent
+			// Each selected branch name of the line becomes a branch ref; the
+			// trunk is a line without aliases, selected as "trunk".
+			names := line.aliases
 			if id == "trunk" {
-				g.Manifest.Refs["refs/heads/cvs/trunk"] = parent
+				names = []string{TrunkBranch}
 			}
-			for _, alias := range line.aliases {
-				ref, e := EncodedRef("refs/heads/cvs/", alias)
+			for _, name := range names {
+				// A real branch named like the trunk would make the map ambiguous.
+				if id != "trunk" && name == TrunkBranch && p.BranchMapped() {
+					return Generation{}, fmt.Errorf("a CVS branch named %q cannot be told apart from the trunk in a branch map", TrunkBranch)
+				}
+				ref, selected, e := p.BranchRef(name)
 				if e != nil {
 					return Generation{}, e
 				}
-				g.Manifest.Refs[ref] = parent
+				if selected {
+					g.Manifest.Refs[ref] = parent
+				}
 			}
 			remaining = slices.Delete(remaining, i, i+1)
 			progress = true

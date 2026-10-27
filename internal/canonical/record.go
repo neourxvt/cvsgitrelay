@@ -36,6 +36,12 @@ type Policy struct {
 	// Authors maps raw CVS usernames to "Name <email>" Git identities. Only
 	// format 3 supports it; like the rest of the policy it is fixed at init.
 	Authors map[string]string `json:",omitempty"`
+	// Branches selects and renames the branches projected as Git branches: it
+	// maps "trunk" or a raw CVS branch name to a Git branch name. Unmapped
+	// branches get no branch ref, though their history stays in the object
+	// store. Empty projects every branch under refs/heads/cvs/. Like the rest
+	// of the policy it is fixed at init.
+	Branches map[string]string `json:",omitempty"`
 }
 
 // Version returns the destination format number this policy encodes.
@@ -88,6 +94,9 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("author map identity must have the form \"Name <email>\"")
 		}
 	}
+	if err := p.validateBranches(); err != nil {
+		return err
+	}
 	if len(p.Mappings) == 0 {
 		return fmt.Errorf("explicit archive mapping required")
 	}
@@ -132,6 +141,17 @@ func (p Policy) Bytes() []byte {
 		for _, name := range names {
 			b = append(b, frame(name)...)
 			b = append(b, frame(p.Authors[name])...)
+		}
+	}
+	// The branch map joins the policy only when used, so destinations without
+	// one keep their digest.
+	if p.BranchMapped() {
+		names := SortedKeys(p.Branches)
+		b = append(b, frame("branch-map-v1")...)
+		b = append(b, U(uint64(len(names)))...)
+		for _, name := range names {
+			b = append(b, frame(name)...)
+			b = append(b, frame(p.Branches[name])...)
 		}
 	}
 	return b

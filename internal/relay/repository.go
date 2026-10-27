@@ -192,7 +192,7 @@ func (r *Repository) allRefs(ctx context.Context) (map[string]string, error) {
 		if len(parts) != 3 || !validOID(parts[1]) {
 			return nil, diag.New("integrity", "refs.enumerate", "invalid Git ref record", nil)
 		}
-		if ownedNamespace(parts[0]) && parts[2] != "" {
+		if r.ownedRef(parts[0]) && parts[2] != "" {
 			return nil, diag.New("conflict", "refs.enumerate", "symbolic managed refs are forbidden", nil, "ref", parts[0])
 		}
 		refs[parts[0]] = parts[1]
@@ -213,8 +213,10 @@ func decodeJSON(data []byte, dst any) error {
 	return nil
 }
 
-func ownedNamespace(ref string) bool {
-	return strings.HasPrefix(ref, "refs/heads/cvs/") || strings.HasPrefix(ref, "refs/tags/cvs/") || strings.HasPrefix(ref, "refs/cvsgitrelay/")
+// ownedRef reports whether the exporter owns a ref: its reserved namespaces
+// and the Git branches named by the policy's branch map.
+func (r *Repository) ownedRef(ref string) bool {
+	return strings.HasPrefix(ref, "refs/heads/cvs/") || strings.HasPrefix(ref, "refs/tags/cvs/") || strings.HasPrefix(ref, "refs/cvsgitrelay/") || r.Config.Policy.MappedBranchRef(ref)
 }
 
 // Format 2 destinations keep their hex revision events; new destinations use
@@ -235,8 +237,9 @@ func validateConfig(c Config) error {
 
 // Init reserves only an empty dedicated destination. Initialization stores the
 // selected policy but does not publish a generation before a full source scan.
-// New destinations use format 3; authors is its optional CVS username map.
-func Init(ctx context.Context, runner *process.Runner, path, root, module, source, submodules, verification string, authors map[string]string) error {
+// New destinations use format 3; authors is its optional CVS username map and
+// branches the optional selection and renaming of branches.
+func Init(ctx context.Context, runner *process.Runner, path, root, module, source, submodules, verification string, authors, branches map[string]string) error {
 	r := &Repository{Config: Config{Version: 3, SourceID: source, CVSRoot: root, Module: module}, Runner: runner, Submodules: submodules}
 	if _, err := sourceDirectory(root); err != nil {
 		return err
@@ -244,7 +247,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module, sourc
 	if err := modulePath(module); err != nil {
 		return err
 	}
-	initialPolicy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Mappings: []canonical.Mapping{{Archive: module}}, Format: 3, Authors: authors}
+	initialPolicy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Mappings: []canonical.Mapping{{Archive: module}}, Format: 3, Authors: authors, Branches: branches}
 	if err := initialPolicy.Validate(); err != nil {
 		return diag.New("config", "init.policy", "invalid canonical policy", err)
 	}
@@ -253,7 +256,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module, sourc
 		return err
 	}
 
-	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors}
+	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors, Branches: branches}
 	for _, m := range layout {
 		policy.Mappings = append(policy.Mappings, canonical.Mapping{Archive: m.Source, Checkout: m.Destination})
 	}
@@ -309,7 +312,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module, sourc
 	if err != nil {
 		return err
 	}
-	if _, err := r.git(ctx, nil, nil, "symbolic-ref", "HEAD", trunkRef); err != nil {
+	if _, err := r.git(ctx, nil, nil, "symbolic-ref", "HEAD", r.Config.Policy.HeadRef()); err != nil {
 		return err
 	}
 	return durableFile(filepath.Join(r.Path, "cvsgitrelay.json"), append(data, '\n'))
