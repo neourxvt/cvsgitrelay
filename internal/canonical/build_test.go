@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"math/rand"
 	"os"
 	"slices"
@@ -319,6 +320,50 @@ func BenchmarkFullReplay(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, e := Build(in, p); e != nil {
 			b.Fatal(e)
+		}
+	}
+}
+
+// The incremental replay tree must emit exactly the trees, and tree objects,
+// that the reference encoder produces from the complete file map.
+func TestLineTreeMatchesReferenceTree(t *testing.T) {
+	random := rand.New(rand.NewSource(1))
+	paths := []string{"a", "b", "d/a", "d/b", "d/e", "d/e/a", "d/e/f/g", "d-x", "d.x", "e/a", "e/b/c", "z"}
+	files := map[string]string{}
+	incremental, reference := Objects{}, Objects{}
+	tree := newLineTree(incremental)
+	for step := 0; step < 2000; step++ {
+		path := paths[random.Intn(len(paths))]
+		if random.Intn(3) == 0 {
+			delete(files, path)
+			tree.remove(path)
+		} else {
+			blob := OID("blob", []byte{byte(random.Intn(4))})
+			// Skip moves that the reference would reject as file/directory conflicts.
+			candidate := maps.Clone(files)
+			candidate[path] = blob
+			if _, err := (Objects{}).Tree(candidate); err != nil {
+				if tree.set(path, blob) == nil {
+					t.Fatalf("step %d: conflict accepted for %s", step, path)
+				}
+				continue
+			}
+			files = candidate
+			if err := tree.set(path, blob); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want, err := reference.Tree(files)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := tree.oid(); got != want {
+			t.Fatalf("step %d: tree %s, want %s", step, got, want)
+		}
+	}
+	for oid, o := range incremental {
+		if r, ok := reference[oid]; !ok || r.Kind != o.Kind || !bytes.Equal(r.Data, o.Data) {
+			t.Fatalf("incremental tree emitted an object the reference never produced: %s", oid)
 		}
 	}
 }

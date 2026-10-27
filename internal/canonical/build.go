@@ -189,11 +189,10 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			if !ready {
 				continue
 			}
-			files := map[string]string{}
+			files := newLineTree(g.Objects)
 			var parent string
 			if id == "trunk" {
-				tree, _ := g.Objects.Tree(files)
-				parent = g.Objects.Synthetic(tree, nil, "cvsgitrelay-root-v2\nline="+Hex(id)+"\n")
+				parent = g.Objects.Synthetic(files.oid(), nil, "cvsgitrelay-root-v2\nline="+Hex(id)+"\n")
 			} else {
 				var anchor *Record
 				var pairs []string
@@ -206,7 +205,9 @@ func Build(input Inventory, p Policy) (Generation, error) {
 						anchor = r
 					}
 					if r.State == "live" {
-						files[r.Path] = blobs[r.Key.ID()]
+						if e := files.set(r.Path, blobs[r.Key.ID()]); e != nil {
+							return Generation{}, e
+						}
 					}
 					pairs = append(pairs, string(append(frame(f.id), B(r.Key.Bytes())...)))
 				}
@@ -218,42 +219,47 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				for _, pair := range pairs {
 					message += "member=" + Hex(pair) + "\n"
 				}
-				tree, e := g.Objects.Tree(files)
-				if e != nil {
-					return Generation{}, e
-				}
 				anchorOID := events[anchor.Key.ID()]
 				if anchorOID == "" {
 					return Generation{}, fmt.Errorf("unresolved seed anchor")
 				}
-				parent = g.Objects.Synthetic(tree, []string{anchorOID}, message)
+				parent = g.Objects.Synthetic(files.oid(), []string{anchorOID}, message)
 			}
 			var pending []Record
 			for _, f := range line.members {
 				pending = append(pending, f.events...)
 			}
 			slices.SortFunc(pending, eventCompare)
-			// Kahn's ready queue is represented by a sorted slice in the reference
-			// implementation. Rechecking from the start preserves tie precedence.
-			for len(pending) > 0 {
-				index := slices.IndexFunc(pending, func(r Record) bool { return r.Parent == nil || events[r.Parent.ID()] != "" })
-				if index < 0 {
+			// Kahn's algorithm always emits the earliest ready event in eventCompare
+			// order, which preserves the reference tie precedence. Ready events are
+			// heap positions in the sorted slice; waiting events are released when
+			// their parent is emitted.
+			var queue readyQueue
+			waiting := map[string][]int{}
+			for i, r := range pending {
+				if r.Parent == nil || events[r.Parent.ID()] != "" {
+					queue.push(i)
+				} else {
+					waiting[r.Parent.ID()] = append(waiting[r.Parent.ID()], i)
+				}
+			}
+			for range pending {
+				if queue.Len() == 0 {
 					return Generation{}, fmt.Errorf("cyclic ancestry")
 				}
-				r := pending[index]
-				pending = slices.Delete(pending, index, index+1)
+				r := pending[queue.pop()]
 				if r.State == "dead" {
-					delete(files, r.Path)
-				} else {
-					files[r.Path] = blobs[r.Key.ID()]
-				}
-				tree, e := g.Objects.Tree(files)
-				if e != nil {
+					files.remove(r.Path)
+				} else if e := files.set(r.Path, blobs[r.Key.ID()]); e != nil {
 					return Generation{}, e
 				}
-				parent = g.Objects.Event(r, tree, parent)
+				parent = g.Objects.Event(r, files.oid(), parent)
 				events[r.Key.ID()] = parent
 				g.Manifest.Revisions[r.Key.ID()] = RevisionEntry{r.Fingerprint(), parent}
+				for _, child := range waiting[r.Key.ID()] {
+					queue.push(child)
+				}
+				delete(waiting, r.Key.ID())
 			}
 			g.Manifest.Lines[id] = parent
 			ref, e := EncodedRef("refs/cvsgitrelay/lines/", id)
@@ -331,16 +337,18 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		return Generation{}, e
 	}
 	g.State = g.Objects.Synthetic(tree, parents, "cvsgitrelay-state-v2\n")
-	if err := g.ValidateReachability(); err != nil {
-		return Generation{}, err
-	}
 	// Dead source bodies and intermediate encoder scratch objects need not
 	// appear in Git's reachable graph. The comparison/verification boundary is
-	// precisely the objects protected by the authoritative generation.
-	g.Objects, err = g.reachableObjects()
+	// precisely the objects protected by the authoritative generation. One walk
+	// serves both the reachability check and the pruning.
+	reachable, err := g.reachableObjects()
 	if err != nil {
 		return Generation{}, err
 	}
+	if err := g.validateReachable(reachable); err != nil {
+		return Generation{}, err
+	}
+	g.Objects = reachable
 	return g, nil
 }
 
@@ -399,6 +407,12 @@ func (g Generation) ValidateReachability() error {
 	if err != nil {
 		return err
 	}
+	return g.validateReachable(seen)
+}
+
+// validateReachable checks revision events and projections against the result
+// of an existing reachability walk.
+func (g Generation) validateReachable(seen Objects) error {
 	for _, r := range g.Manifest.Revisions {
 		if seen[r.Event].Kind != "commit" {
 			return fmt.Errorf("unreachable revision event")
