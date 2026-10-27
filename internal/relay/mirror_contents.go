@@ -88,18 +88,35 @@ func mirrorLastLine(data []byte) []byte {
 	return data[bytes.LastIndexByte(data, '\n')+1:]
 }
 
+// mirrorDownload holds one revision's remote reads. The exact body is fetched
+// only for live revisions without a cached body.
+type mirrorDownload struct {
+	annotation, content []byte
+	fetched             bool
+}
+
 // Fill the durable cache before constructing deltas. Acquisition retains one
-// revision at a time, plus the existing bounded annotation read-ahead window.
+// revision at a time, plus the bounded read-ahead window of download lanes.
 func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, connections int) error {
 	var missing []*Revision
+	// Planned before the lanes start; workers only read this map.
+	needsBody := map[*Revision]bool{}
 	for _, rev := range revisions {
 		entry, exists := m.entries[mirrorKey(rev)]
 		if !exists || !entry.Annotated {
 			missing = append(missing, rev)
+			needsBody[rev] = !(exists && entry.Blob != "") && rev.State != "dead"
 		}
 	}
-	fetches := newAllRevisionFetches(ctx, missing, connections, func(ctx context.Context, rev *Revision) ([]byte, error) {
-		return m.source.cvs(ctx, "", "rannotate", "-F", "-r", rev.Number, rev.SourcePath)
+	// Both remote reads of a revision run in its lane, so --connections
+	// overlaps body checkouts as well as annotations.
+	fetches := newAllRevisionFetches(ctx, missing, connections, func(ctx context.Context, rev *Revision) (mirrorDownload, error) {
+		raw, err := m.source.cvs(ctx, "", "rannotate", "-F", "-r", rev.Number, rev.SourcePath)
+		if err != nil || !needsBody[rev] {
+			return mirrorDownload{annotation: raw}, err
+		}
+		content, err := m.source.fetch(ctx, rev)
+		return mirrorDownload{annotation: raw, content: content, fetched: true}, err
 	})
 	defer fetches.close()
 	unterminated := map[mirrorLineEnd]bool{}
@@ -110,6 +127,7 @@ func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, co
 		m.progress.update("activity", "Reading revision contents", "path", rev.SourcePath, "revision", rev.Number)
 		entry, exists := m.entries[mirrorKey(rev)]
 		var raw []byte
+		var download mirrorDownload
 		if entry.Annotated {
 			cached, err := m.readEntry(ctx, rev)
 			if err != nil {
@@ -118,10 +136,11 @@ func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, co
 			raw = cached.Annotation
 		} else {
 			var err error
-			raw, err = fetches.next()
+			download, err = fetches.next()
 			if err != nil {
 				return err
 			}
+			raw = download.annotation
 		}
 		annotated, labels, err := parseMirrorAnnotation(raw)
 		if err != nil {
@@ -142,9 +161,12 @@ func (m *cvsMirror) cacheContents(ctx context.Context, revisions []*Revision, co
 			data = annotated
 			m.summary.Downloaded++
 		} else {
-			data, err = m.source.fetch(ctx, rev)
-			if err != nil {
-				return err
+			data = download.content
+			if !download.fetched {
+				// Not reached with a validated cache index; stay correct anyway.
+				if data, err = m.source.fetch(ctx, rev); err != nil {
+					return err
+				}
 			}
 			m.summary.Downloaded++
 		}

@@ -37,7 +37,7 @@ func (m *cvsMirror) checkoutObservation(ctx context.Context, root, module, revis
 	return err
 }
 
-func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory) error {
+func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory, connections int) error {
 	m.administration = map[string][]byte{}
 	directorySet := map[string]bool{"CVSROOT": true}
 	roots := []string{"CVSROOT"}
@@ -105,7 +105,9 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory) error
 	}
 	// Files absent from a default checkout can still expose mode through an older
 	// live revision or a branch. No content is fabricated for that metadata probe.
-	historicalStarted := false
+	// Modes can change without new revisions, so every run probes again; the
+	// probes are independent checkouts and share the connection limit.
+	var probes []*Revision
 	for _, file := range inventory.Files {
 		if _, known := m.modes[file.SourcePath]; known {
 			continue
@@ -117,21 +119,27 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory) error
 				live = rev
 			}
 		}
-		if live == nil {
-			continue
+		if live != nil {
+			probes = append(probes, live)
 		}
+	}
+	slices.SortFunc(probes, func(a, b *Revision) int { return strings.Compare(a.SourcePath, b.SourcePath) })
+	if len(probes) > 0 {
 		// Start this phase once so its clock covers every historical probe.
-		if !historicalStarted {
-			m.progress.stage("Observing historical CVS file permissions")
-			historicalStarted = true
-		}
-		m.progress.update("path", file.SourcePath, "revision", live.Number)
-		m.source.Runner.Log.Debug("Observing historical CVS file permissions", "path", file.SourcePath, "revision", live.Number)
+		m.progress.stage("Observing historical CVS file permissions", "files", len(probes))
+	}
+	type modeProbe struct {
+		mode  fs.FileMode
+		known bool
+	}
+	results := newAllRevisionFetches(ctx, probes, connections, func(ctx context.Context, live *Revision) (modeProbe, error) {
+		m.source.Runner.Log.Debug("Observing historical CVS file permissions", "path", live.SourcePath, "revision", live.Number)
 		workspace, err := os.MkdirTemp(m.state, "work-mode-")
 		if err != nil {
-			return err
+			return modeProbe{}, err
 		}
-		err = m.checkoutObservation(ctx, workspace, file.SourcePath, live.Number)
+		var probe modeProbe
+		err = m.checkoutObservation(ctx, workspace, live.SourcePath, live.Number)
 		if err == nil {
 			err = filepath.WalkDir(workspace, func(path string, entry fs.DirEntry, walkErr error) error {
 				if walkErr != nil {
@@ -147,13 +155,22 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory) error
 				if err != nil {
 					return err
 				}
-				m.modes[file.SourcePath] = info.Mode().Perm()
-				m.modeKnown[file.SourcePath] = true
+				probe = modeProbe{info.Mode().Perm(), true}
 				return nil
 			})
 		}
+		return probe, err
+	})
+	defer results.close()
+	for _, live := range probes {
+		probe, err := results.next()
 		if err != nil {
 			return err
+		}
+		m.progress.update("path", live.SourcePath, "revision", live.Number)
+		if probe.known {
+			m.modes[live.SourcePath] = probe.mode
+			m.modeKnown[live.SourcePath] = true
 		}
 	}
 	m.directories = nil

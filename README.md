@@ -124,7 +124,8 @@ requires no rsync or server filesystem access. `--output` is required and relati
 to the caller; its parent must exist. The Git destination from TOML is unused.
 Mirrors always include every supported revision line and included module,
 regardless of `sync.scope` and `source.submodules`. `--connections` controls
-concurrent revision downloads within each file. Existing generated CVSROOT copies
+concurrent revision downloads within each file, covering both annotations and
+exact bodies, and concurrent historical permission probes. Existing generated CVSROOT copies
 without a cache are adopted using their local revision contents.
 Other nonempty CVS repositories are rejected.
 
