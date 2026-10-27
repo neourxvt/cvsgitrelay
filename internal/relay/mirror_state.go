@@ -282,7 +282,7 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	if err != nil {
 		return summary, err
 	}
-	if err = m.observeTree(ctx, before, options.Connections); err != nil {
+	if err = m.observeTree(ctx, before, options.Connections, options.RefreshPermissions); err != nil {
 		return summary, err
 	}
 	staging, err := os.MkdirTemp(m.state, "work-")

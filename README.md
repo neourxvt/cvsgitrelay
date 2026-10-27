@@ -132,6 +132,12 @@ Other nonempty CVS repositories are rejected.
 Completed downloads are saved atomically in `.cvsgitrelay-mirror` inside the
 CVSROOT. Repeated runs reuse cached revision bodies and annotations. Each run also
 refreshes temporary current checkouts to observe permissions and empty directories.
+Files absent from those checkouts, such as deleted files in `Attic`, need one
+historical checkout each to expose their permissions. Those results are cached in
+`.cvsgitrelay-mirror/probes.json` and reused while the probed revision and archive
+location are unchanged, so an unchanged run makes no per-file requests. Pass
+`--refresh-permissions` to repeat every probe, for example after permissions were
+changed on the server without a new revision.
 An unchanged run performs zero historical revision downloads and zero archive
 updates; the current-tree observation can transfer current file contents.
 The summary reports `downloaded`, `reused` and `updated_files`. Interruptions keep
@@ -147,7 +153,9 @@ For equal accessible source state and the same mirror format, fresh and
 incremental mirrors converge to identical file paths, bytes, modes and epoch
 mtimes, including administration and cache files. Output paths, CVS transports,
 usernames, wall-clock time, polling schedule and connection counts do not enter
-the generated contents. This guarantee covers the local CVSROOT; Git import uses the separate canonical graph described in
+the generated contents. A server-side permission change without a new revision is
+observed on the next run for files in the current checkouts; for other files it
+needs `--refresh-permissions`. This guarantee covers the local CVSROOT; Git import uses the separate canonical graph described in
 [the v2 format contract](doc-format-v2.md).
 
 Cached revision metadata and content digests are checked before reuse. Missing

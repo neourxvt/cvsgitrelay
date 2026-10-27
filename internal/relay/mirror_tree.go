@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io/fs"
@@ -37,7 +38,77 @@ func (m *cvsMirror) checkoutObservation(ctx context.Context, root, module, revis
 	return err
 }
 
-func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory, connections int) error {
+// mirrorModeProbe records one historical permission probe. The archive mode
+// is a property of the RCS file, so an earlier result stays valid while the
+// probed revision and the archive location are unchanged.
+type mirrorModeProbe struct {
+	Source    []byte `json:"source"`
+	Revision  string `json:"revision"`
+	Attic     bool   `json:"attic"`
+	Mode      uint32 `json:"mode"`
+	Available bool   `json:"available"`
+}
+
+const mirrorModeProbesFile = "probes.json"
+
+// historicalProbeTarget returns the newest live revision, whose checkout
+// exposes the archive mode, or nil when no live revision exists.
+func historicalProbeTarget(file *File) *Revision {
+	var live *Revision
+	for _, rev := range file.Revisions {
+		if rev.State != "dead" && (live == nil || compareNumber(rev.Number, live.Number) > 0) {
+			live = rev
+		}
+	}
+	return live
+}
+
+// loadModeProbes reads earlier probe results by source path. The file is only
+// an optimization: a missing or unreadable one makes every probe run again.
+func (m *cvsMirror) loadModeProbes() map[string]mirrorModeProbe {
+	cached := map[string]mirrorModeProbe{}
+	data, err := os.ReadFile(filepath.Join(m.state, mirrorModeProbesFile))
+	if err != nil {
+		return cached
+	}
+	var probes []mirrorModeProbe
+	if decodeJSON(data, &probes) != nil {
+		m.source.Runner.Log.Warn("Ignoring unreadable historical permission cache", "path", filepath.Join(m.state, mirrorModeProbesFile))
+		return cached
+	}
+	for _, probe := range probes {
+		if probe.Mode&^0777 == 0 {
+			cached[string(probe.Source)] = probe
+		}
+	}
+	return cached
+}
+
+// saveModeProbes replaces the cache with exactly the current results, sorted,
+// so fresh and incremental mirrors write identical bytes.
+func (m *cvsMirror) saveModeProbes(probes []mirrorModeProbe) error {
+	slices.SortFunc(probes, func(a, b mirrorModeProbe) int { return bytes.Compare(a.Source, b.Source) })
+	if probes == nil {
+		probes = []mirrorModeProbe{}
+	}
+	data, err := json.Marshal(probes)
+	if err != nil {
+		return err
+	}
+	return mirrorWrite(filepath.Join(m.state, mirrorModeProbesFile), data)
+}
+
+// reusableModeProbe reports whether an earlier probe of file still applies.
+func reusableModeProbe(cached map[string]mirrorModeProbe, file *File, live *Revision) (mirrorModeProbe, bool) {
+	probe, ok := cached[file.SourcePath]
+	return probe, ok && probe.Revision == live.Number && probe.Attic == file.InAttic
+}
+
+// observeTree checks out every root to observe current modes and directories.
+// Files outside those checkouts need one historical checkout each; unless
+// refresh is set, results cached for an unchanged probe target are reused, as
+// those checkouts dominate the remote requests of an unchanged mirror run.
+func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory, connections int, refresh bool) error {
 	m.administration = map[string][]byte{}
 	directorySet := map[string]bool{"CVSROOT": true}
 	roots := []string{"CVSROOT"}
@@ -105,25 +176,34 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory, conne
 	}
 	// Files absent from a default checkout can still expose mode through an older
 	// live revision or a branch. No content is fabricated for that metadata probe.
-	// Modes can change without new revisions, so every run probes again; the
-	// probes are independent checkouts and share the connection limit.
+	// The probes are independent checkouts and share the connection limit.
+	cached := map[string]mirrorModeProbe{}
+	if !refresh {
+		cached = m.loadModeProbes()
+	}
 	var probes []*Revision
+	var results []mirrorModeProbe
 	for _, file := range inventory.Files {
 		if _, known := m.modes[file.SourcePath]; known {
 			continue
 		}
 		m.modes[file.SourcePath] = 0600
-		var live *Revision
-		for _, rev := range file.Revisions {
-			if rev.State != "dead" && (live == nil || compareNumber(rev.Number, live.Number) > 0) {
-				live = rev
+		live := historicalProbeTarget(file)
+		if live == nil {
+			continue
+		}
+		if probe, ok := reusableModeProbe(cached, file, live); ok {
+			if probe.Available {
+				m.modes[file.SourcePath] = fs.FileMode(probe.Mode)
+				m.modeKnown[file.SourcePath] = true
 			}
+			results = append(results, probe)
+			continue
 		}
-		if live != nil {
-			probes = append(probes, live)
-		}
+		probes = append(probes, live)
 	}
 	slices.SortFunc(probes, func(a, b *Revision) int { return strings.Compare(a.SourcePath, b.SourcePath) })
+	m.source.Runner.Log.Info("Historical CVS file permissions planned", "probes", len(probes), "reused", len(results), "refresh", refresh)
 	if len(probes) > 0 {
 		// Start this phase once so its clock covers every historical probe.
 		m.progress.stage("Observing historical CVS file permissions", "files", len(probes))
@@ -132,7 +212,7 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory, conne
 		mode  fs.FileMode
 		known bool
 	}
-	results := newAllRevisionFetches(ctx, probes, connections, func(ctx context.Context, live *Revision) (modeProbe, error) {
+	fetched := newAllRevisionFetches(ctx, probes, connections, func(ctx context.Context, live *Revision) (modeProbe, error) {
 		m.source.Runner.Log.Debug("Observing historical CVS file permissions", "path", live.SourcePath, "revision", live.Number)
 		workspace, err := os.MkdirTemp(m.state, "work-mode-")
 		if err != nil {
@@ -161,9 +241,9 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory, conne
 		}
 		return probe, err
 	})
-	defer results.close()
+	defer fetched.close()
 	for _, live := range probes {
-		probe, err := results.next()
+		probe, err := fetched.next()
 		if err != nil {
 			return err
 		}
@@ -172,6 +252,11 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory, conne
 			m.modes[live.SourcePath] = probe.mode
 			m.modeKnown[live.SourcePath] = true
 		}
+		file := inventory.Files[live.SourcePath]
+		results = append(results, mirrorModeProbe{Source: []byte(live.SourcePath), Revision: live.Number, Attic: file.InAttic, Mode: uint32(probe.mode), Available: probe.known})
+	}
+	if err := m.saveModeProbes(results); err != nil {
+		return err
 	}
 	m.directories = nil
 	for directory := range directorySet {

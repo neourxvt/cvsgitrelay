@@ -18,7 +18,10 @@ type Options struct {
 	Mode             string
 	Failpoint        string
 	ProgressInterval time.Duration
-	faultCounts      map[string]int
+	// RefreshPermissions makes mirror repeat every historical permission
+	// probe instead of reusing results for unchanged probe targets.
+	RefreshPermissions bool
+	faultCounts        map[string]int
 }
 
 // Summaries identify the configured integrity guarantee on every operation.

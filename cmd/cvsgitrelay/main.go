@@ -41,6 +41,7 @@ type cliOptions struct {
 	maxOutput                   int
 	progressInterval            time.Duration
 	failpoint                   string
+	refreshPermissions          bool
 }
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -93,6 +94,7 @@ func newOperationCommand(operation, short string, setExit func(int)) *cobra.Comm
 	addOperationFlags(command, operation, options)
 	if operation == "mirror" {
 		command.Flags().StringVar(&options.output, "output", "", "required local CVSROOT directory to create or update (relative to the caller)")
+		command.Flags().BoolVar(&options.refreshPermissions, "refresh-permissions", false, "repeat every historical permission probe instead of reusing results for unchanged files")
 		_ = command.MarkFlagRequired("output")
 	}
 	return command
@@ -232,7 +234,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	}
 	if operation == "mirror" {
 		// A CVS-to-CVS mirror does not open the configured Git destination.
-		summary, err = relay.Mirror(ctx, runner, cfg.Source.CVSRoot, cfg.Source.Module, options.output, cfg.Source.RequireConsecutiveRevisions, relay.Options{Connections: cfg.Sync.Connections, ProgressInterval: progressInterval})
+		summary, err = relay.Mirror(ctx, runner, cfg.Source.CVSRoot, cfg.Source.Module, options.output, cfg.Source.RequireConsecutiveRevisions, relay.Options{Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, RefreshPermissions: options.refreshPermissions})
 	} else {
 		var repository *relay.Repository
 		repository, err = relay.Open(ctx, runner, cfg.Destination.Repo)
