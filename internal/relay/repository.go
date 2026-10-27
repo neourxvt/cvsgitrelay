@@ -43,10 +43,13 @@ type Repository struct {
 	Submodules                  string
 	RequireConsecutiveRevisions bool
 	sourceReader                func(context.Context) (canonical.Inventory, sourceStats, error)
-	objectWrites                int
-	metadataRequests            int
-	metadataBytes               int64
-	lock                        *os.File
+	// openedState marks the generation that Open validated, so the first
+	// operation under the same lock need not repeat the full validation.
+	openedState      bool
+	objectWrites     int
+	metadataRequests int
+	metadataBytes    int64
+	lock             *os.File
 }
 
 func (r *Repository) submodulePolicy() string {
@@ -74,20 +77,14 @@ func (r *Repository) ConfigureSource(root, module, submodules string) error {
 }
 
 func (r *Repository) git(ctx context.Context, input []byte, env []string, args ...string) ([]byte, error) {
-	prefix := []string{"--git-dir=" + r.Path, "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null", "-c", "gc.auto=0", "-c", "core.fsync=loose-object,reference", "-c", "core.fsyncMethod=fsync", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false", "-c", "i18n.commitEncoding=UTF-8"}
-	return r.Runner.Run(ctx, "", env, input, "git", append(prefix, args...)...)
+	return r.gitAt(ctx, "", input, env, args...)
 }
 
-func (r *Repository) oid(ctx context.Context, input []byte, env []string, args ...string) (string, error) {
-	out, err := r.git(ctx, input, env, args...)
-	if err != nil {
-		return "", err
-	}
-	s := strings.TrimSuffix(string(out), "\n")
-	if !validOID(s) {
-		return "", diag.New("integrity", "git.oid", "invalid SHA-1 object ID from Git", nil, "operation", args[0], "output_bytes", len(out))
-	}
-	return s, nil
+// gitAt runs Git with a working directory; the repository is always selected
+// through its absolute --git-dir.
+func (r *Repository) gitAt(ctx context.Context, dir string, input []byte, env []string, args ...string) ([]byte, error) {
+	prefix := []string{"--git-dir=" + r.Path, "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null", "-c", "gc.auto=0", "-c", "core.fsync=loose-object,reference", "-c", "core.fsyncMethod=fsync", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false", "-c", "i18n.commitEncoding=UTF-8"}
+	return r.Runner.Run(ctx, dir, env, input, "git", append(prefix, args...)...)
 }
 
 func validOID(s string) bool {
@@ -352,5 +349,6 @@ func Open(ctx context.Context, runner *process.Runner, path string) (*Repository
 	if err := r.loadCurrent(ctx); err != nil {
 		return fail(err)
 	}
+	r.openedState = true
 	return r, nil
 }

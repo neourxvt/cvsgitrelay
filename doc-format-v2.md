@@ -300,7 +300,11 @@ through GC while projections are being reconciled. Operational refs under
 `refs/cvsgitrelay/backup/` are excluded from canonical comparison; the active
 publication journal is subject to its own strict validation.
 
-Git loose-object/reference fsync is enabled. Tests exercise process crashes,
+Git loose-object/reference fsync is enabled; objects are written and read back
+in batches, using batched fsync for staged writes. After a publication that
+wrote objects, an incremental `git repack -d` with pack fsync moves the new
+reachable loose objects into one pack. It never removes unreachable objects or
+existing packs. Tests exercise process crashes,
 including SIGKILL, and kernel lock release. Power-loss durability remains
 dependent on Git, filesystem and storage semantics and is not inferred from
 those tests. Concurrent destructive GC and noncooperating writers are unsupported.

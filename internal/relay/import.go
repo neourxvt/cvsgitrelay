@@ -89,6 +89,13 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if err := r.cacheAccepted(in); err != nil && r.Runner.Log != nil {
 		r.Runner.Log.Warn("Content cache could not be saved; the next run will re-read source bytes")
 	}
+	// Automatic GC stays disabled, so pack the new loose objects here. The
+	// generation is already published; a failed repack only leaves them loose.
+	if r.objectWrites > 0 {
+		if err := r.packObjects(ctx); err != nil && r.Runner.Log != nil {
+			r.Runner.Log.Warn("New objects could not be packed; they remain loose until the next repack", "code", diag.Code(err))
+		}
+	}
 	s.Imported = len(in.Records)
 	s.Pending = 0
 	s.State = r.StateOID
@@ -145,14 +152,15 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 		return s, diag.New("integrity", "verify.generation", "source has a different canonical generation; run sync", nil)
 	}
 	// Validate every expected raw object without rewriting objects or refs.
-	for oid, obj := range g.Objects {
-		data, err := r.git(ctx, nil, nil, "cat-file", obj.Kind, oid)
-		if err != nil {
-			return s, err
+	// Rehashing the stored bytes detects corruption independently of Git.
+	err = r.readObjects(ctx, canonical.SortedKeys(g.Objects), func(oid, kind string, data []byte) error {
+		if kind != g.Objects[oid].Kind || canonical.OID(kind, data) != oid {
+			return diag.New("integrity", "verify.objects", "canonical object is corrupt", nil)
 		}
-		if canonical.OID(obj.Kind, data) != oid {
-			return s, diag.New("integrity", "verify.objects", "canonical object is corrupt", nil)
-		}
+		return nil
+	})
+	if err != nil {
+		return s, err
 	}
 	return s, nil
 }

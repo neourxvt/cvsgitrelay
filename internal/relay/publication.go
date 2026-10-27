@@ -148,61 +148,96 @@ func projectionChecks(i publicationIntent, next bool) map[string]string {
 
 // Object writes use the byte encoder's payload, never commit-tree's environment.
 // Re-read every object to detect pre-existing damaged objects as well as writes.
+// Objects are processed in sorted chunks: missing ones are written per kind in
+// one batch, then the whole chunk is read back and compared before its
+// failpoints run, so an interruption still leaves a verified prefix.
 func (r *Repository) storeObjects(ctx context.Context, objects canonical.Objects, opts *Options) (int, error) {
 	written := 0
 	keys := canonical.SortedKeys(objects)
-	probe, err := r.git(ctx, []byte(strings.Join(keys, "\n")+"\n"), nil, "cat-file", "--batch-check=%(objectname) %(objecttype)")
+	for _, oid := range keys {
+		if o := objects[oid]; canonical.OID(o.Kind, o.Data) != oid {
+			return written, diag.New("integrity", "objects.write", "builder emitted incorrect object ID", nil)
+		}
+	}
+	if err := r.removeObjectStaging(); err != nil {
+		return written, err
+	}
+	existing, err := r.probeObjects(ctx, keys)
 	if err != nil {
 		return 0, err
 	}
-	existing := map[string]bool{}
-	for _, row := range strings.Split(strings.TrimSpace(string(probe)), "\n") {
-		fields := strings.Fields(row)
-		if len(fields) != 2 {
-			return 0, diag.New("integrity", "objects.probe", "invalid object probe", nil)
+	emptyTreePath := filepath.Join(r.Path, "objects", emptyTreeOID[:2], emptyTreeOID[2:])
+	// hash-object prints one ID line per written object.
+	rows := r.batchRows(writeBatchObjects, 41)
+	for start := 0; start < len(keys); {
+		end, size := start, 0
+		for end < len(keys) && end-start < rows && (end == start || size+len(objects[keys[end]].Data) <= writeBatchBytes) {
+			size += len(objects[keys[end]].Data)
+			end++
 		}
-		if fields[1] != "missing" {
-			existing[fields[0]] = true
+		chunk := keys[start:end]
+		missing := map[string][]string{}
+		var emptyTreeBefore error
+		forceEmptyTree := false
+		for _, oid := range chunk {
+			// Git can synthesize the empty tree for cat-file without storing it.
+			// Force its write so GC, transfer and fsck have an actual object.
+			if oid == emptyTreeOID {
+				forceEmptyTree = true
+				_, emptyTreeBefore = os.Stat(emptyTreePath)
+			} else if _, ok := existing[oid]; ok {
+				continue
+			}
+			missing[objects[oid].Kind] = append(missing[objects[oid].Kind], oid)
 		}
-	}
-	for _, oid := range keys {
-		o := objects[oid]
-		if canonical.OID(o.Kind, o.Data) != oid {
-			return written, diag.New("integrity", "objects.write", "builder emitted incorrect object ID", nil)
-		}
-		// Git can synthesize the empty tree for cat-file without storing it.
-		// Force its write so GC, transfer and fsck have an actual object.
-		emptyTree := oid == "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-		if !existing[oid] || emptyTree {
-			_, beforeErr := os.Stat(filepath.Join(r.Path, "objects", oid[:2], oid[2:]))
-			got, err := r.oid(ctx, o.Data, nil, "hash-object", "-t", o.Kind, "-w", "--stdin")
-			if err != nil {
+		for _, kind := range canonical.SortedKeys(missing) {
+			if err := r.writeObjects(ctx, kind, missing[kind], objects); err != nil {
 				return written, err
 			}
-			if got != oid {
-				return written, diag.New("integrity", "objects.write", "Git disagrees with canonical object encoder", nil)
+			for _, oid := range missing[kind] {
+				if oid != emptyTreeOID {
+					written++
+					r.objectWrites++
+				}
 			}
-			_, afterErr := os.Stat(filepath.Join(r.Path, "objects", oid[:2], oid[2:]))
-			if !emptyTree || (os.IsNotExist(beforeErr) && afterErr == nil) {
+		}
+		if forceEmptyTree {
+			if _, after := os.Stat(emptyTreePath); os.IsNotExist(emptyTreeBefore) && after == nil {
 				written++
 				r.objectWrites++
 			}
 		}
-		actual, err := r.git(ctx, nil, nil, "cat-file", o.Kind, oid)
+		err := r.readObjects(ctx, chunk, func(oid, kind string, data []byte) error {
+			if o := objects[oid]; kind != o.Kind || !bytes.Equal(data, o.Data) {
+				return diag.New("integrity", "objects.read", "stored object bytes differ from canonical payload", nil)
+			}
+			return nil
+		})
 		if err != nil {
 			return written, err
 		}
-		if !bytes.Equal(actual, o.Data) {
-			return written, diag.New("integrity", "objects.read", "stored object bytes differ from canonical payload", nil)
-		}
-		stage := map[string]string{"blob": "blob-written", "tree": "tree-written", "commit": "commit-written"}[o.Kind]
 		if opts != nil {
-			if err := opts.hit(stage); err != nil {
-				return written, err
+			for _, oid := range chunk {
+				stage := map[string]string{"blob": "blob-written", "tree": "tree-written", "commit": "commit-written"}[objects[oid].Kind]
+				if err := opts.hit(stage); err != nil {
+					return written, err
+				}
 			}
 		}
+		start = end
 	}
 	return written, nil
+}
+
+// compareObjects checks that every expected object is stored with exactly the
+// expected kind and payload, using batched reads.
+func (r *Repository) compareObjects(ctx context.Context, objects canonical.Objects) error {
+	return r.readObjects(ctx, canonical.SortedKeys(objects), func(oid, kind string, data []byte) error {
+		if o := objects[oid]; kind != o.Kind || !bytes.Equal(data, o.Data) {
+			return fmt.Errorf("stored object bytes differ")
+		}
+		return nil
+	})
 }
 
 func emptyManifest(p canonical.Policy) canonical.Manifest {
@@ -267,14 +302,8 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 	if expected != oid {
 		return fail(fmt.Errorf("state/manifest envelope mismatch"))
 	}
-	for id, obj := range o {
-		actual, e := r.git(ctx, nil, nil, "cat-file", obj.Kind, id)
-		if e != nil {
-			return fail(e)
-		}
-		if !bytes.Equal(actual, obj.Data) {
-			return fail(fmt.Errorf("canonical envelope bytes differ"))
-		}
+	if err := r.compareObjects(ctx, o); err != nil {
+		return fail(fmt.Errorf("canonical envelope bytes differ: %w", err))
 	}
 	ancestry, err := r.git(ctx, nil, nil, "rev-list", oid)
 	if err != nil {
@@ -284,32 +313,41 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 	for _, id := range strings.Fields(string(ancestry)) {
 		reachable[id] = true
 	}
-	seen := map[string]bool{}
-	for key, entry := range m.Revisions {
-		if !reachable[entry.Event] || seen[entry.Event] {
+	// Events are unique, so each one maps back to exactly one manifest key.
+	keys := map[string]string{}
+	var events []string
+	for _, key := range canonical.SortedKeys(m.Revisions) {
+		event := m.Revisions[key].Event
+		if !reachable[event] || keys[event] != "" {
 			return fail(fmt.Errorf("duplicate or unreachable revision event"))
 		}
-		seen[entry.Event] = true
-		data, e := r.git(ctx, nil, nil, "cat-file", "commit", entry.Event)
-		if e != nil {
-			return fail(e)
+		keys[event] = key
+		events = append(events, event)
+	}
+	err = r.readObjects(ctx, events, func(event, kind string, data []byte) error {
+		if kind != "commit" {
+			return fmt.Errorf("revision event is not a commit")
 		}
 		head, message, ok := bytes.Cut(data, []byte("\n\n"))
 		if !ok {
-			return fail(fmt.Errorf("event message missing"))
+			return fmt.Errorf("event message missing")
 		}
 		rev, e := canonical.ParseRevisionMessage(message)
-		if e != nil || rev.Key.ID() != key {
-			return fail(fmt.Errorf("event key mismatch"))
+		if e != nil || rev.Key.ID() != keys[event] {
+			return fmt.Errorf("event key mismatch")
 		}
 		lines := strings.Split(string(head), "\n")
 		if len(lines) != 4 || !strings.HasPrefix(lines[0], "tree ") || !strings.HasPrefix(lines[1], "parent ") {
-			return fail(fmt.Errorf("invalid event ancestry"))
+			return fmt.Errorf("invalid event ancestry")
 		}
 		expected := canonical.CommitBytes(strings.TrimPrefix(lines[0], "tree "), []string{strings.TrimPrefix(lines[1], "parent ")}, "CVS-"+canonical.Hex(rev.Author)+" <cvs@invalid>", rev.Time, message)
 		if !bytes.Equal(data, expected) {
-			return fail(fmt.Errorf("noncanonical event header"))
+			return fmt.Errorf("noncanonical event header")
 		}
+		return nil
+	})
+	if err != nil {
+		return fail(err)
 	}
 	for _, tip := range m.Refs {
 		if !reachable[tip] {
@@ -360,10 +398,15 @@ func (r *Repository) loadCurrent(ctx context.Context) error {
 	if refs[stateRef] == "" && marked {
 		return diag.New("integrity", "state.read", "missing authoritative state ref after a publication attempt; recovery evidence is required", nil)
 	}
-	m, err := r.readState(ctx, refs[stateRef])
-	if err != nil {
-		return err
+	m := r.Manifest
+	// Open validated this generation under the same writer lock moments ago.
+	// Skip only that one repeat; later loads always validate in full.
+	if !r.openedState || refs[stateRef] != r.StateOID {
+		if m, err = r.readState(ctx, refs[stateRef]); err != nil {
+			return err
+		}
 	}
+	r.openedState = false
 	if err := validateProjections(refs, refs[stateRef], m.Refs, false); err != nil {
 		return err
 	}
@@ -438,14 +481,8 @@ func (r *Repository) validateIntent(ctx context.Context, journal string) (public
 	if err != nil || expected != journal {
 		return i, fmt.Errorf("invalid journal envelope")
 	}
-	for id, obj := range o {
-		actual, e := r.git(ctx, nil, nil, "cat-file", obj.Kind, id)
-		if e != nil {
-			return i, e
-		}
-		if !bytes.Equal(actual, obj.Data) {
-			return i, fmt.Errorf("journal object differs")
-		}
+	if err := r.compareObjects(ctx, o); err != nil {
+		return i, fmt.Errorf("journal object differs: %w", err)
 	}
 	return i, nil
 }
