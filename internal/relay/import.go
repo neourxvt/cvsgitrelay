@@ -110,6 +110,9 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	return s, nil
 }
 
+// Status reports discovery from metadata alone: module definitions and the
+// rlog enumeration, without reading any revision contents. It still rejects
+// layout changes and disappeared revisions; content checks belong to verify.
 func (r *Repository) Status(ctx context.Context, scope string) (Summary, error) {
 	if scope != "" && scope != "all" {
 		return Summary{}, diag.New("usage", "status.scope", "v2 supports only the complete configured scope", nil)
@@ -117,13 +120,20 @@ func (r *Repository) Status(ctx context.Context, scope string) (Summary, error) 
 	if err := r.loadCurrent(ctx); err != nil {
 		return Summary{}, err
 	}
-	in, stats, err := r.acceptSource(ctx, &Options{})
+	requests, metadataBytes := r.metadataRequests, r.metadataBytes
+	in, _, err := r.readSourceMetadata(ctx)
 	if err != nil {
 		return Summary{}, err
 	}
+	if in, err = in.Normalize(r.Config.Policy); err != nil {
+		return Summary{}, diag.New("source", "source.normalize", "invalid normalized source inventory", err)
+	}
+	if _, err := r.verifyListed(in); err != nil {
+		return Summary{}, err
+	}
 	s := r.generationSummary("status", in)
-	s.SourceBytes = stats.Bytes
-	s.SourceRequests = stats.Requests
+	s.SourceBytes = r.metadataBytes - metadataBytes
+	s.SourceRequests = r.metadataRequests - requests
 	return s, nil
 }
 

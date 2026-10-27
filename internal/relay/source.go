@@ -28,39 +28,10 @@ func (r *Repository) readSourceScope(ctx context.Context, connections int) (cano
 // bytes reuse that slice as soon as they are read, so a confirming scan does
 // not keep a second copy of the whole revision history alive.
 func (r *Repository) readSharedSourceScope(ctx context.Context, connections int, previous map[string][]byte) (canonical.Inventory, sourceStats, error) {
-	var in canonical.Inventory
 	var stats sourceStats
-	listed, err := r.scan(ctx)
+	in, listed, err := r.readSourceMetadata(ctx)
 	if err != nil {
 		return in, stats, err
-	}
-	if err := validateReportedAncestry(listed); err != nil {
-		return in, stats, err
-	}
-	for _, revision := range listed.Ordered {
-		state := "live"
-		if revision.State == "dead" {
-			state = "dead"
-		}
-		record := canonical.Record{
-			Key:  canonical.Key{Source: r.Config.SourceID, Archive: revision.SourcePath, Number: revision.Number},
-			Path: revision.Path, Time: revision.Time, Author: revision.Author,
-			Log: revision.Log, State: state, Present: state == "live",
-		}
-		if revision.Predecessor != "" {
-			parent := canonical.Key{Source: r.Config.SourceID, Archive: revision.SourcePath, Number: revision.Predecessor}
-			record.Parent = &parent
-		}
-		in.Records = append(in.Records, record)
-	}
-	for _, file := range listed.Files {
-		for name, target := range file.Symbols {
-			symbol := canonical.Symbol{Archive: file.SourcePath, Name: name, Target: target}
-			if branch, ok := canonical.Branch(target); ok {
-				symbol.Branch, symbol.Target = true, branch
-			}
-			in.Symbols = append(in.Symbols, symbol)
-		}
 	}
 
 	// Dead checkout output cannot distinguish an inaccessible body from an
@@ -104,6 +75,45 @@ func (r *Repository) readSharedSourceScope(ctx context.Context, connections int,
 	return in, stats, nil
 }
 
+// readSourceMetadata enumerates every revision record and symbol without any
+// contents. Live records are marked present; their bodies are not read here.
+func (r *Repository) readSourceMetadata(ctx context.Context) (canonical.Inventory, *Inventory, error) {
+	var in canonical.Inventory
+	listed, err := r.scan(ctx)
+	if err != nil {
+		return in, nil, err
+	}
+	if err := validateReportedAncestry(listed); err != nil {
+		return in, nil, err
+	}
+	for _, revision := range listed.Ordered {
+		state := "live"
+		if revision.State == "dead" {
+			state = "dead"
+		}
+		record := canonical.Record{
+			Key:  canonical.Key{Source: r.Config.SourceID, Archive: revision.SourcePath, Number: revision.Number},
+			Path: revision.Path, Time: revision.Time, Author: revision.Author,
+			Log: revision.Log, State: state, Present: state == "live",
+		}
+		if revision.Predecessor != "" {
+			parent := canonical.Key{Source: r.Config.SourceID, Archive: revision.SourcePath, Number: revision.Predecessor}
+			record.Parent = &parent
+		}
+		in.Records = append(in.Records, record)
+	}
+	for _, file := range listed.Files {
+		for name, target := range file.Symbols {
+			symbol := canonical.Symbol{Archive: file.SourcePath, Name: name, Target: target}
+			if branch, ok := canonical.Branch(target); ok {
+				symbol.Branch, symbol.Target = true, branch
+			}
+			in.Symbols = append(in.Symbols, symbol)
+		}
+	}
+	return in, listed, nil
+}
+
 // GNU CVS reports complete numeric lines and the branch numbers originating
 // at each forkpoint. Their combination establishes the supported logical RCS
 // ancestry, including gaps, without inventing an inaccessible numeric parent.
@@ -134,20 +144,31 @@ func validateReportedAncestry(in *Inventory) error {
 // Accepted fingerprints are sufficient to compare every immutable field after
 // restart; operational cache/journal contents have no authority over acceptance.
 func (r *Repository) verifyAccepted(in canonical.Inventory) error {
-	current := map[string]canonical.Record{}
-	for _, record := range in.Records {
-		current[record.Key.ID()] = record
+	current, err := r.verifyListed(in)
+	if err != nil {
+		return err
 	}
 	for key, old := range r.Manifest.Revisions {
-		record, ok := current[key]
-		if !ok {
-			return diag.New("source", "source.verify", "SOURCE_MISSING: previously accepted revision disappeared", nil, "key_hex", hexBytes(key))
-		}
-		if record.Fingerprint() != old.Fingerprint {
+		if current[key].Fingerprint() != old.Fingerprint {
 			return diag.New("source", "source.verify", "SOURCE_MUTATED: immutable revision record changed", nil, "key_hex", hexBytes(key))
 		}
 	}
 	return nil
+}
+
+// verifyListed requires every accepted revision to still be listed. It needs
+// metadata only and returns the current records by ID.
+func (r *Repository) verifyListed(in canonical.Inventory) (map[string]canonical.Record, error) {
+	current := map[string]canonical.Record{}
+	for _, record := range in.Records {
+		current[record.Key.ID()] = record
+	}
+	for _, key := range canonical.SortedKeys(r.Manifest.Revisions) {
+		if _, ok := current[key]; !ok {
+			return nil, diag.New("source", "source.verify", "SOURCE_MISSING: previously accepted revision disappeared", nil, "key_hex", hexBytes(key))
+		}
+	}
+	return current, nil
 }
 
 // Trust mode may reuse only a complete record matching the authoritative

@@ -70,7 +70,7 @@ func newRootCommand(setExit func(int)) *cobra.Command {
 	}
 	addOperationFlags(root, "sync", options)
 	root.AddCommand(
-		newOperationCommand("status", "Show discovered, imported, and pending CVS revisions.", setExit),
+		newOperationCommand("status", "Show discovered, imported, and pending CVS revisions from metadata only.", setExit),
 		newOperationCommand("verify", "Check the mirror against CVS and Git integrity rules.", setExit),
 		newOperationCommand("mirror", "Create or incrementally update a deterministic local CVSROOT.", setExit),
 	)

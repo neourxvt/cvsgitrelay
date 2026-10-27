@@ -57,7 +57,10 @@ the CVS reader consistently represents their unavailable content as absent.
 from a nonauthoritative local cache. It can miss old-content edits with unchanged
 metadata. Damaged or missing caches fall back to source reads. Metadata is always
 re-enumerated over the full scope; valid old cached content can skip a checkout.
-Every report and manifest identifies the verification policy.
+Every report and manifest identifies the verification policy. `status` reads
+only module definitions and `rlog` metadata: it reports discovered, imported
+and pending revisions and rejects layout changes or disappeared revisions, but
+never reads revision contents. Use `verify` for content checks.
 
 `refs/cvsgitrelay/state` is the authoritative generation. Its deterministic state
 commit contains `manifest.v2` and protects every canonical event and tag snapshot
