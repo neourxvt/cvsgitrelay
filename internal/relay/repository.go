@@ -92,6 +92,12 @@ func validOID(s string) bool {
 	return e == nil && len(b) == 20 && s == strings.ToLower(s)
 }
 
+// localCVSRoot reports whether CVS reads the repository from this machine's
+// filesystem instead of through a network transport.
+func localCVSRoot(root string) bool {
+	return strings.HasPrefix(root, "/") || strings.HasPrefix(root, ":local:") || strings.HasPrefix(root, ":fork:")
+}
+
 func sourceDirectory(root string) (string, error) {
 	if strings.ContainsAny(root, "\x00\r\n") || !utf8.ValidString(root) {
 		return "", fmt.Errorf("CVSROOT contains incompatible bytes")

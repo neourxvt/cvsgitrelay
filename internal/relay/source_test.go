@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -127,5 +128,20 @@ func TestRlogFramingImitationRejected(t *testing.T) {
 	}
 	if err := r.verifyRlogArchives(context.Background(), "module", archives[:1]); err != nil {
 		t.Fatalf("matching archive listing was rejected: %v", err)
+	}
+}
+
+// Local CVSROOTs ignore the configured remote connection limit and use every
+// core; network transports keep the configured limit.
+func TestSourceConnections(t *testing.T) {
+	for _, root := range []string{"/srv/cvs", ":local:/srv/cvs", ":fork:/srv/cvs"} {
+		if got := sourceConnections(root, 1); got != runtime.NumCPU() {
+			t.Fatalf("%s: %d connections", root, got)
+		}
+	}
+	for _, root := range []string{":pserver:anonymous@cvs.example.org:/cvs", ":ext:user@host:/cvs"} {
+		if got := sourceConnections(root, 1); got != 1 {
+			t.Fatalf("%s: %d connections", root, got)
+		}
 	}
 }

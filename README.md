@@ -27,7 +27,8 @@ Git import works directly with ordinary remote CVS access, including `:pserver:`
 and `:ext:` CVSROOTs. It uses complete GNU CVS `rlog` listings and exact numeric
 `checkout -p -kb` reads. Neither server filesystem access nor a preliminary
 CVS-to-CVS mirror is required. Local and `:fork:` sources use the same CVS command
-reader and normalization profile. Existing CVS authentication facilities remain
+reader and normalization profile. For a local CVSROOT, sync and verify ignore
+`sync.connections` and run one revision read per CPU core. Existing CVS authentication facilities remain
 responsible for login and remote-shell credentials.
 
 Every sync scans the complete configured scope twice, verifies every previously

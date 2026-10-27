@@ -118,7 +118,7 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	}
 	// A local source and its generated output must never contain one another;
 	// otherwise recursive discovery or publication could ingest its own output.
-	if strings.HasPrefix(root, "/") || strings.HasPrefix(root, ":local:") || strings.HasPrefix(root, ":fork:") {
+	if localCVSRoot(root) {
 		sourcePath, _ := sourceDirectory(root)
 		sourcePath, err = filepath.EvalSymlinks(sourcePath)
 		if err != nil {

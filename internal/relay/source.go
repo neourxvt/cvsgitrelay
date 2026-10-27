@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"cvsgitrelay/internal/canonical"
 	"cvsgitrelay/internal/diag"
@@ -238,6 +239,16 @@ func (r *Repository) cacheAccepted(in canonical.Inventory) error {
 	return nil
 }
 
+// sourceConnections returns the number of concurrent CVS reads. The configured
+// limit protects a remote server; a local CVSROOT has no connections to limit,
+// and every read is an independent local cvs process, so all cores are used.
+func sourceConnections(root string, configured int) int {
+	if localCVSRoot(root) {
+		return runtime.NumCPU()
+	}
+	return configured
+}
+
 // Inventory acceptance compares two complete scans, including normalized bytes.
 // This detects observed instability, without claiming an atomic CVS snapshot.
 func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical.Inventory, sourceStats, error) {
@@ -247,14 +258,15 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 	}
 	// Keep slow remote enumeration and content reads visible independently of
 	// subprocess completion. Progress never enters canonical source records.
+	connections := sourceConnections(r.Config.CVSRoot, opts.Connections)
 	if r.Runner.Log != nil {
 		progress := newMirrorProgress(ctx, r.Runner.Log, opts.ProgressInterval)
-		progress.stage("Verifying complete CVS source", "verification_policy", r.Config.Policy.Verify)
+		progress.stage("Verifying complete CVS source", "verification_policy", r.Config.Policy.Verify, "connections", connections)
 		defer progress.close()
 	}
 	var previous map[string][]byte
 	reader := func(ctx context.Context) (canonical.Inventory, sourceStats, error) {
-		return r.readSharedSourceScope(ctx, opts.Connections, previous)
+		return r.readSharedSourceScope(ctx, connections, previous)
 	}
 	metadataRequests, metadataBytes := r.metadataRequests, r.metadataBytes
 	if r.sourceReader != nil {

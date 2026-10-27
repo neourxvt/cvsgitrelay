@@ -55,6 +55,8 @@ repo = "./git-rxvt-unicode-v2"
 scope = "all"
 
 # Parallel CVS revision reads. Scheduling never affects canonical bytes.
+# sync and verify ignore this for a local CVSROOT (a path, :local: or :fork:)
+# and use one read per CPU core instead.
 # CLI override: --connections
 connections = 1
 
