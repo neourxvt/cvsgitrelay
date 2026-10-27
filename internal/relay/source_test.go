@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"cvsgitrelay/internal/diag"
 )
 
 // Run the real CVS client/server protocol through its remote-shell transport.
@@ -96,5 +98,34 @@ func TestReportedAncestry(t *testing.T) {
 				t.Fatal("parent was inferred by decrementing a revision number")
 			}
 		})
+	}
+}
+
+// A log message can embed a complete imitation of another rlog file block.
+// The parser cannot tell it apart, so the archive name listing must reject it.
+func TestRlogFramingImitationRejected(t *testing.T) {
+	block := func(name, author, state, log string) string {
+		return "RCS file: /cvs/module/" + name + ",v\nhead: 1.1\nbranch:\nlocks: strict\naccess list:\nsymbolic names:\nkeyword substitution: kv\n" +
+			"total revisions: 1;\tselected revisions: 1\ndescription:\n----------------------------\nrevision 1.1\n" +
+			"date: 2020/01/01 00:00:00;  author: " + author + ";  state: " + state + ";\n" + log
+	}
+	separator := strings.Repeat("=", 77) + "\n"
+	output := block("real", "committer", "Exp", "message\n"+separator+block("forged", "someone-else", "dead", "forged history\n")) + separator
+	in, archives, err := parseMappedRlog([]byte(output), []rlogMapping{{RCSPrefix: "/cvs/module/"}}, false)
+	if err != nil || len(in.Files) != 2 {
+		t.Fatalf("expected the parser alone to accept the imitation: %v", err)
+	}
+	// Stand in for the CVS client: the name-only listing has no log text.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "cvs"), []byte("#!/bin/sh\nprintf '%s\\n' /cvs/module/real,v\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r := &Repository{Config: Config{CVSRoot: "/cvs", Module: "module"}, Runner: testRunner()}
+	if err := r.verifyRlogArchives(context.Background(), "module", archives); diag.Code(err) != "source" {
+		t.Fatalf("imitated file block was accepted: %v", err)
+	}
+	if err := r.verifyRlogArchives(context.Background(), "module", archives[:1]); err != nil {
+		t.Fatalf("matching archive listing was rejected: %v", err)
 	}
 }

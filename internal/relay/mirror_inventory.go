@@ -152,8 +152,11 @@ func (r *Repository) mirrorScan(ctx context.Context, progress *mirrorProgress) (
 	if err != nil {
 		return nil, err
 	}
-	admin, err := parseMappedRlogMode(data, []rlogMapping{{RCSPrefix: root + "/CVSROOT/", SourcePrefix: "CVSROOT"}}, true)
+	admin, archives, err := parseMappedRlog(data, []rlogMapping{{RCSPrefix: root + "/CVSROOT/", SourcePrefix: "CVSROOT"}}, true)
 	if err != nil {
+		return nil, err
+	}
+	if err := r.verifyRlogArchives(ctx, "CVSROOT/", archives); err != nil {
 		return nil, err
 	}
 	var files []*File

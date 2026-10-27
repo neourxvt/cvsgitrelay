@@ -86,8 +86,11 @@ func (r *Repository) scan(ctx context.Context) (*Inventory, error) {
 	for _, mapping := range layout {
 		mappings = append(mappings, rlogMapping{RCSPrefix: dir + "/" + mapping.Source + "/", SourcePrefix: mapping.Source, DestinationPrefix: mapping.Destination, Excluded: policy == "exclude" && mapping.Destination != ""})
 	}
-	in, err := parseMappedRlogMode(out, mappings, r.mirroring)
+	in, archives, err := parseMappedRlog(out, mappings, r.mirroring)
 	if err != nil {
+		return nil, err
+	}
+	if err := r.verifyRlogArchives(ctx, r.Config.Module, archives); err != nil {
 		return nil, err
 	}
 	for _, file := range in.Files {

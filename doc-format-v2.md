@@ -9,7 +9,9 @@ format ID unless all serialized reachable bytes remain compatible.
 
 The reader profile is `gnu-cvs-rlog-v2`: ordinary GNU CVS client/server reads,
 using complete unfiltered `rlog` output and exact numeric `checkout -n -p -kb`
-retrieval. Remote `:pserver:`, `:ext:`, `:gserver:` and `:kserver:` locators and
+retrieval. Log messages are printed verbatim and can imitate rlog framing, so the
+set of parsed `RCS file:` headers must equal the name-only `rlog -R` listing of
+the same target; any difference rejects the scan. Remote `:pserver:`, `:ext:`, `:gserver:` and `:kserver:` locators and
 local absolute, `:local:` and `:fork:` locators share this one profile. The chosen
 transport must be supported by the installed CVS client. No server filesystem
 access, administrative privileges or preliminary local archive copy is required.

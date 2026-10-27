@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -25,11 +26,19 @@ type rlogMapping struct {
 // Both importers share the exposed GNU CVS grammar; the CVS mirror additionally
 // preserves administrative fields and states outside the canonical Git model.
 func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inventory, error) {
+	in, _, err := parseMappedRlog(data, mappings, mirror)
+	return in, err
+}
+
+// parseMappedRlog also returns every parsed "RCS file:" header, including
+// excluded archives, so callers can check the framing against a name listing.
+func parseMappedRlog(data []byte, mappings []rlogMapping, mirror bool) (*Inventory, []string, error) {
 	if bytes.IndexByte(data, 0) >= 0 {
-		return nil, diag.New("parse", "rlog", "NUL in metadata output", nil)
+		return nil, nil, diag.New("parse", "rlog", "NUL in metadata output", nil)
 	}
 	lines := strings.Split(string(data), "\n")
 	var files []*File
+	var archives []string
 	var excluded []ModuleMapping
 	for _, mapping := range mappings {
 		if mapping.Excluded {
@@ -44,22 +53,23 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 		}
 		start := pos
 		if !strings.HasPrefix(lines[pos], "RCS file: ") {
-			return nil, parseError(pos, "expected RCS file header")
+			return nil, nil, parseError(pos, "expected RCS file header")
 		}
 		rcs := strings.TrimPrefix(lines[pos], "RCS file: ")
+		archives = append(archives, rcs)
 		var mapping *rlogMapping
 		var prefixes []string
 		for i := range mappings {
 			prefixes = append(prefixes, mappings[i].RCSPrefix)
 			if strings.HasPrefix(rcs, mappings[i].RCSPrefix) {
 				if mapping != nil {
-					return nil, parseError(pos, "RCS file matches multiple module directories")
+					return nil, nil, parseError(pos, "RCS file matches multiple module directories")
 				}
 				mapping = &mappings[i]
 			}
 		}
 		if mapping == nil || !strings.HasSuffix(rcs, ",v") {
-			return nil, diag.New("parse", "rlog.parse", "RCS path does not match the configured module directory", nil,
+			return nil, nil, diag.New("parse", "rlog.parse", "RCS path does not match the configured module directory", nil,
 				"line", pos+1, "actual_rcs_path", rcs, "expected_rcs_prefixes", prefixes,
 				"hint", "file is outside the directories declared by the resolved CVS module")
 		}
@@ -72,7 +82,7 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 			p = strings.Join(parts, "/")
 		}
 		if err := validatePath(p); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		sourcePath := ""
 		if mapping.SourcePrefix != "" {
@@ -82,7 +92,7 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 			p = mapping.DestinationPrefix + "/" + p
 		}
 		if err := validatePath(p); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		f := &File{Path: p, SourcePath: sourcePath, Symbols: map[string]string{}, Locks: map[string]string{}, InAttic: inAttic}
 		pos++
@@ -96,78 +106,78 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 		}
 		var ok bool
 		if f.Head, ok = take("head: "); !ok {
-			return nil, parseError(pos, "expected head")
+			return nil, nil, parseError(pos, "expected head")
 		}
 		if f.DefaultBranch, ok = take("branch:"); !ok {
-			return nil, parseError(pos, "expected default branch")
+			return nil, nil, parseError(pos, "expected default branch")
 		}
 		if f.DefaultBranch != "" {
 			if b, ok := branchNumber(f.DefaultBranch); !ok || b != f.DefaultBranch {
-				return nil, parseError(pos, "invalid default branch number")
+				return nil, nil, parseError(pos, "invalid default branch number")
 			}
 		}
 		locking, ok := take("locks:")
 		if !ok {
-			return nil, parseError(pos, "expected locks")
+			return nil, nil, parseError(pos, "expected locks")
 		}
 		f.StrictLocks = locking == "strict"
 		for pos < len(lines) && strings.HasPrefix(lines[pos], "\t") {
 			owner, revision, found := strings.Cut(strings.TrimSpace(lines[pos]), ": ")
 			if _, err := numbers(revision); !found || err != nil || !rcsIdentifier(owner) {
-				return nil, parseError(pos, "invalid revision lock")
+				return nil, nil, parseError(pos, "invalid revision lock")
 			}
 			f.Locks[revision] = owner
 			pos++
 		}
 		if _, ok = take("access list:"); !ok {
-			return nil, parseError(pos, "expected access list")
+			return nil, nil, parseError(pos, "expected access list")
 		}
 		for pos < len(lines) && strings.HasPrefix(lines[pos], "\t") {
 			owner := strings.TrimSpace(lines[pos])
 			if !rcsIdentifier(owner) {
-				return nil, parseError(pos, "invalid access-list entry")
+				return nil, nil, parseError(pos, "invalid access-list entry")
 			}
 			f.Access = append(f.Access, owner)
 			pos++
 		}
 		if _, ok = take("symbolic names:"); !ok {
-			return nil, parseError(pos, "expected symbolic names")
+			return nil, nil, parseError(pos, "expected symbolic names")
 		}
 		for pos < len(lines) && strings.HasPrefix(lines[pos], "\t") {
 			name, num, found := strings.Cut(strings.TrimPrefix(lines[pos], "\t"), ": ")
 			if _, err := numbers(num); !found || err != nil || name == "" || strings.ContainsAny(name, "\x00\r\n\t") {
-				return nil, parseError(pos, "invalid symbolic name")
+				return nil, nil, parseError(pos, "invalid symbolic name")
 			}
 			n, _ := numbers(num)
 			if slices.Contains(n, uint64(0)) {
 				if _, ok := branchNumber(num); !ok {
-					return nil, parseError(pos, "invalid magic branch symbol")
+					return nil, nil, parseError(pos, "invalid magic branch symbol")
 				}
 			}
 			if _, exists := f.Symbols[name]; exists {
-				return nil, parseError(pos, "duplicate symbolic name")
+				return nil, nil, parseError(pos, "duplicate symbolic name")
 			}
 			f.Symbols[name] = num
 			pos++
 		}
 		if f.KeywordMode, ok = take("keyword substitution:"); !ok {
-			return nil, parseError(pos, "expected keyword mode")
+			return nil, nil, parseError(pos, "expected keyword mode")
 		}
 		if pos >= len(lines) {
-			return nil, parseError(pos, "missing revision counts")
+			return nil, nil, parseError(pos, "missing revision counts")
 		}
 		m := countsPattern.FindStringSubmatch(lines[pos])
 		if m == nil {
-			return nil, parseError(pos, "invalid total/selected counts")
+			return nil, nil, parseError(pos, "invalid total/selected counts")
 		}
 		total, _ := strconv.Atoi(m[1])
 		selected, _ := strconv.Atoi(m[2])
 		pos++
 		if total != selected {
-			return nil, parseError(pos, "filtered history; total and selected counts must match")
+			return nil, nil, parseError(pos, "filtered history; total and selected counts must match")
 		}
 		if _, ok = take("description:"); !ok {
-			return nil, parseError(pos, "expected description")
+			return nil, nil, parseError(pos, "expected description")
 		}
 		descriptionStart := pos
 		for pos < len(lines) && !recordBoundary(lines, pos) && lines[pos] != fileSeparator {
@@ -183,23 +193,23 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 			locker := ""
 			if locked {
 				if !strings.HasSuffix(lockedBy, ";") {
-					return nil, parseError(pos, "invalid revision locker")
+					return nil, nil, parseError(pos, "invalid revision locker")
 				}
 				locker = strings.TrimSuffix(lockedBy, ";")
 				if !rcsIdentifier(locker) {
-					return nil, parseError(pos, "invalid revision locker")
+					return nil, nil, parseError(pos, "invalid revision locker")
 				}
 			}
 			pos++
 			r := &Revision{Number: number, Locker: locker}
 			if _, err := numbers(number); err != nil {
-				return nil, parseError(pos, "invalid numeric revision")
+				return nil, nil, parseError(pos, "invalid numeric revision")
 			}
 			if pos >= len(lines) {
-				return nil, parseError(pos, "missing revision metadata")
+				return nil, nil, parseError(pos, "missing revision metadata")
 			}
 			if err := parseMetadataMode(lines[pos], r, mirror); err != nil {
-				return nil, diag.New("parse", "rlog.metadata", "unsupported revision record", err, "line", pos+1, "path_hex", hexBytes(p), "revision", number)
+				return nil, nil, diag.New("parse", "rlog.metadata", "unsupported revision record", err, "line", pos+1, "path_hex", hexBytes(p), "revision", number)
 			}
 			pos++
 			if pos < len(lines) && strings.HasPrefix(lines[pos], "branches:") {
@@ -209,7 +219,7 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 					}
 					r.Branches = append(r.Branches, b)
 					if _, ok := branchNumber(b); !ok {
-						return nil, parseError(pos, "invalid branches metadata")
+						return nil, nil, parseError(pos, "invalid branches metadata")
 					}
 				}
 				pos++
@@ -227,11 +237,11 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 			f.Revisions = append(f.Revisions, r)
 		}
 		if pos >= len(lines) || !fileBoundary(lines, pos) {
-			return nil, parseError(pos, "truncated file block")
+			return nil, nil, parseError(pos, "truncated file block")
 		}
 		pos++
 		if len(f.Revisions) != total {
-			return nil, diag.New("parse", "rlog.count", "revision count mismatch or ambiguous log boundary", nil, "path_hex", hexBytes(p), "line", start+1, "declared", total, "parsed", len(f.Revisions))
+			return nil, nil, diag.New("parse", "rlog.count", "revision count mismatch or ambiguous log boundary", nil, "path_hex", hexBytes(p), "line", start+1, "declared", total, "parsed", len(f.Revisions))
 		}
 		// Validate framing and declared counts even for excluded modules, then
 		// omit their files before building revision ancestry or branch seeds.
@@ -245,11 +255,11 @@ func parseMappedRlogMode(data []byte, mappings []rlogMapping, mirror bool) (*Inv
 	}
 	in, err := buildFileInventory(files, mirror)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	in.Excluded = excluded
 	in.ExcludedFiles, in.ExcludedRevisions = excludedFiles, excludedRevisions
-	return in, nil
+	return in, archives, nil
 }
 
 func recordBoundary(lines []string, i int) bool {
@@ -325,4 +335,28 @@ func parseMetadataMode(s string, r *Revision, mirror bool) error {
 
 func parseError(line int, message string) error {
 	return diag.New("parse", "rlog.parse", message, nil, "line", line+1)
+}
+
+// rlog prints log messages verbatim, so a message can imitate the framing of a
+// complete additional file block. The name-only listing contains no message
+// text; requiring exactly the same archives makes such an imitation fail.
+func (r *Repository) verifyRlogArchives(ctx context.Context, target string, parsed []string) error {
+	out, err := r.cvs(ctx, "", "rlog", "-R", target)
+	r.metadataRequests++
+	r.metadataBytes += int64(len(out))
+	if err != nil {
+		return diag.New(diag.Code(err), "cvs.scan", "archive name listing failed", err, "module_hex", hexBytes(target))
+	}
+	listed := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if len(out) == 0 {
+		listed = nil
+	}
+	parsed = slices.Clone(parsed)
+	slices.Sort(listed)
+	slices.Sort(parsed)
+	if !slices.Equal(listed, parsed) {
+		return diag.New("source", "cvs.scan", "rlog file blocks disagree with the archive name listing; a log message may imitate rlog framing", nil,
+			"module_hex", hexBytes(target), "listed", len(listed), "parsed", len(parsed))
+	}
+	return nil
 }
