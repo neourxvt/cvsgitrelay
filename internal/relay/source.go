@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"maps"
@@ -20,6 +21,13 @@ type sourceStats struct {
 // One normalization profile therefore applies across transport aliases; no
 // filesystem access to the server's RCS archives is required or attempted.
 func (r *Repository) readSourceScope(ctx context.Context, connections int) (canonical.Inventory, sourceStats, error) {
+	return r.readSharedSourceScope(ctx, connections, nil)
+}
+
+// previous maps record IDs to the contents of an earlier complete scan. Equal
+// bytes reuse that slice as soon as they are read, so a confirming scan does
+// not keep a second copy of the whole revision history alive.
+func (r *Repository) readSharedSourceScope(ctx context.Context, connections int, previous map[string][]byte) (canonical.Inventory, sourceStats, error) {
 	var in canonical.Inventory
 	var stats sourceStats
 	listed, err := r.scan(ctx)
@@ -58,11 +66,20 @@ func (r *Repository) readSourceScope(ctx context.Context, connections int) (cano
 	// Dead checkout output cannot distinguish an inaccessible body from an
 	// actual empty file. The profile always encodes dead content as absent.
 	// Live contents come from exact numeric -kb checkouts, without filters.
+	share := func(record *canonical.Record) {
+		if old, ok := previous[record.Key.ID()]; ok && bytes.Equal(old, record.Content) {
+			record.Content = old
+		}
+	}
 	var fetches []*Revision
 	var positions []int
 	for i := range in.Records {
 		record := &in.Records[i]
-		if !record.Present || r.reuseTrustedContent(record) {
+		if !record.Present {
+			continue
+		}
+		if r.reuseTrustedContent(record) {
+			share(record)
 			continue
 		}
 		positions = append(positions, i)
@@ -78,6 +95,7 @@ func (r *Repository) readSourceScope(ctx context.Context, connections int) (cano
 			return in, stats, err
 		}
 		in.Records[i].Content = data
+		share(&in.Records[i])
 	}
 	in, err = in.Normalize(r.Config.Policy)
 	if err != nil {
@@ -213,8 +231,9 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 		progress.stage("Verifying complete CVS source", "verification_policy", r.Config.Policy.Verify)
 		defer progress.close()
 	}
+	var previous map[string][]byte
 	reader := func(ctx context.Context) (canonical.Inventory, sourceStats, error) {
-		return r.readSourceScope(ctx, opts.Connections)
+		return r.readSharedSourceScope(ctx, opts.Connections, previous)
 	}
 	metadataRequests, metadataBytes := r.metadataRequests, r.metadataBytes
 	if r.sourceReader != nil {
@@ -226,9 +245,19 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 	if err != nil {
 		return first, stats, err
 	}
-	r.reuseTrusted(&first)
+	// readSharedSourceScope already substitutes trusted cached content while
+	// reading; only injected readers need the separate pass.
+	if r.sourceReader != nil {
+		r.reuseTrusted(&first)
+	}
 	if err := r.verifyAccepted(first); err != nil {
 		return first, stats, err
+	}
+	previous = map[string][]byte{}
+	for _, record := range first.Records {
+		if record.Present {
+			previous[record.Key.ID()] = record.Content
+		}
 	}
 	if err := opts.hit("fetch-complete"); err != nil {
 		return first, stats, err
@@ -239,7 +268,10 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 	if err != nil {
 		return first, stats, err
 	}
-	r.reuseTrusted(&second)
+	previous = nil
+	if r.sourceReader != nil {
+		r.reuseTrusted(&second)
+	}
 	if err := r.verifyAccepted(second); err != nil {
 		return first, stats, err
 	}

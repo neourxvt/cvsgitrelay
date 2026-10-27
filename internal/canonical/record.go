@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"slices"
 	"strconv"
 	"strings"
@@ -182,7 +183,11 @@ type Record struct {
 	Content []byte
 }
 
-func (r Record) Bytes() []byte {
+func (r Record) Bytes() []byte { return append(r.prefix(), r.Content...) }
+
+// prefix is the Record.Bytes encoding up to and including the content length.
+// The content always comes last, so hashes can stream it without a copy.
+func (r Record) prefix() []byte {
 	b := r.Key.Bytes()
 	b = append(b, U(uint64(r.Time))...)
 	for _, v := range []string{r.Author, string(r.Log), r.State} {
@@ -200,9 +205,23 @@ func (r Record) Bytes() []byte {
 		presence = "present"
 	}
 	b = append(b, frame(presence)...)
-	return append(b, B(r.Content)...)
+	return append(b, U(uint64(len(r.Content)))...)
 }
-func (r Record) Fingerprint() string { return Hash("cvsgitrelay-revision-record-v2", r.Bytes()) }
+
+// Fingerprint equals Hash("cvsgitrelay-revision-record-v2", r.Bytes()).
+func (r Record) Fingerprint() string {
+	h := hashWriter("cvsgitrelay-revision-record-v2")
+	h.Write(r.prefix())
+	h.Write(r.Content)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// hashWriter starts the same domain-separated SHA-256 stream as Hash.
+func hashWriter(domain string) hash.Hash {
+	h := sha256.New()
+	h.Write([]byte(domain + "\x00"))
+	return h
+}
 
 type Symbol struct {
 	Archive, Name, Target string
@@ -343,15 +362,21 @@ func (in Inventory) Normalize(p Policy) (Inventory, error) {
 	return in, nil
 }
 
+// Digest streams the framed records and symbols into the hash instead of
+// assembling one buffer holding every revision body.
 func (in Inventory) Digest(source string) string {
-	b := U(uint64(len(in.Records)))
+	h := hashWriter("cvsgitrelay-source-v2")
+	h.Write(U(uint64(len(in.Records))))
 	for _, r := range in.Records {
-		b = append(b, B(r.Key.Bytes())...)
-		b = append(b, B(r.Bytes())...)
+		h.Write(B(r.Key.Bytes()))
+		prefix := r.prefix()
+		h.Write(U(uint64(len(prefix) + len(r.Content))))
+		h.Write(prefix)
+		h.Write(r.Content)
 	}
-	b = append(b, U(uint64(len(in.Symbols)))...)
+	h.Write(U(uint64(len(in.Symbols))))
 	for _, s := range in.Symbols {
-		b = append(b, B(s.Bytes(source))...)
+		h.Write(B(s.Bytes(source)))
 	}
-	return Hash("cvsgitrelay-source-v2", b)
+	return hex.EncodeToString(h.Sum(nil))
 }

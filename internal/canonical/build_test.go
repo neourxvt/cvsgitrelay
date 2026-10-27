@@ -367,3 +367,25 @@ func TestLineTreeMatchesReferenceTree(t *testing.T) {
 		}
 	}
 }
+
+// Streaming hashes must keep the documented framed-buffer definitions.
+func TestStreamingHashesMatchFramedBytes(t *testing.T) {
+	in := fixtureInventory()
+	for _, r := range in.Records {
+		if r.Fingerprint() != Hash("cvsgitrelay-revision-record-v2", r.Bytes()) {
+			t.Fatal("streamed fingerprint differs from framed record bytes")
+		}
+	}
+	b := U(uint64(len(in.Records)))
+	for _, r := range in.Records {
+		b = append(b, B(r.Key.Bytes())...)
+		b = append(b, B(r.Bytes())...)
+	}
+	b = append(b, U(uint64(len(in.Symbols)))...)
+	for _, s := range in.Symbols {
+		b = append(b, B(s.Bytes("test"))...)
+	}
+	if in.Digest("test") != Hash("cvsgitrelay-source-v2", b) {
+		t.Fatal("streamed source digest differs from framed inventory bytes")
+	}
+}

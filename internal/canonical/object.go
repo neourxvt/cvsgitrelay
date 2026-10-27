@@ -28,6 +28,14 @@ func (o Objects) Put(kind string, data []byte) string {
 	o[id] = Object{kind, slices.Clone(data)}
 	return id
 }
+
+// putShared stores data without copying. Callers guarantee that the slice is
+// never modified afterwards, such as normalized inventory contents.
+func (o Objects) putShared(kind string, data []byte) string {
+	id := OID(kind, data)
+	o[id] = Object{kind, data}
+	return id
+}
 func ValidOID(s string) bool {
 	b, e := hex.DecodeString(s)
 	return e == nil && len(b) == 20 && hex.EncodeToString(b) == s

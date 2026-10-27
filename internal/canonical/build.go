@@ -158,9 +158,11 @@ func Build(input Inventory, p Policy) (Generation, error) {
 	}
 	events := map[string]string{}
 	blobs := map[string]string{}
+	// Source contents are not modified after normalization, so blobs share them
+	// rather than holding a second copy of every revision body.
 	for _, r := range in.Records {
 		if r.Present {
-			blobs[r.Key.ID()] = g.Objects.Put("blob", r.Content)
+			blobs[r.Key.ID()] = g.Objects.putShared("blob", r.Content)
 		}
 	}
 	remaining := SortedKeys(projects)
