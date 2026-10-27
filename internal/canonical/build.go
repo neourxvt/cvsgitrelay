@@ -341,12 +341,16 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		if e != nil {
 			return Generation{}, e
 		}
-		message := "cvsgitrelay-tag-v2\nname=" + Hex(name) + "\nselection-sha256=" + Hash("cvsgitrelay-tag-selection-v2", b) + "\n"
-		when := SyntheticTime
+		var oid string
 		if p.Version() == 3 {
-			message, when = p.tagMessage(name), tagTime(selected)
+			oid, e = g.tagCommitV3(p, name, selected, tree, events)
+			if e != nil {
+				return Generation{}, e
+			}
+		} else {
+			message := "cvsgitrelay-tag-v2\nname=" + Hex(name) + "\nselection-sha256=" + Hash("cvsgitrelay-tag-selection-v2", b) + "\n"
+			oid = g.Objects.SyntheticAs(p.Relay(), tree, nil, message, SyntheticTime)
 		}
-		oid := g.Objects.SyntheticAs(p.Relay(), tree, nil, message, when)
 		ref, e := p.TagRef(name)
 		if e != nil {
 			return Generation{}, e
@@ -381,6 +385,30 @@ func Build(input Inventory, p Policy) (Generation, error) {
 	}
 	g.Objects = reachable
 	return g, nil
+}
+
+// tagCommitV3 attaches a format 3 tag snapshot to the history it was taken
+// from. The base is the event commit of the newest selected revision, the
+// one that also dates the tag. If the tree there already equals the snapshot,
+// the tag names that event commit itself. Otherwise a synthetic commit on top
+// of it records the exact selection, so the tag still has the event history
+// as its ancestry instead of being a parentless root.
+func (g Generation) tagCommitV3(p Policy, name string, selected []Record, tree string, events map[string]string) (string, error) {
+	newest := slices.MaxFunc(selected, eventCompare)
+	base := events[newest.Key.ID()]
+	if base == "" {
+		return "", fmt.Errorf("unresolved tag base")
+	}
+	if commitTree(g.Objects[base].Data) == tree {
+		return base, nil
+	}
+	return g.Objects.SyntheticAs(p.Relay(), tree, []string{base}, p.tagMessage(name), tagTime(selected)), nil
+}
+
+// commitTree returns the tree OID in the header of the commit bytes.
+func commitTree(commit []byte) string {
+	tree, _, _ := bytes.Cut(bytes.TrimPrefix(commit, []byte("tree ")), []byte("\n"))
+	return string(tree)
 }
 
 func (g Generation) reachableObjects() (Objects, error) {

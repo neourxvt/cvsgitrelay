@@ -204,9 +204,10 @@ func TestBranchMapPublication(t *testing.T) {
 			t.Fatalf("unmapped ref %s published", ref)
 		}
 	}
-	// Tags are plain refs and show their name in Git.
-	if subject, err := r.git(ctx, nil, nil, "log", "-1", "--format=%s", "refs/tags/REL-1_0"); err != nil || string(subject) != "CVS tag REL-1_0\n" {
-		t.Fatalf("tag not readable: %q %v", subject, err)
+	// Tags are plain refs on the history they were taken from: this one names
+	// the event commit of the revision it selects.
+	if tag, err := r.git(ctx, nil, nil, "rev-parse", "refs/tags/REL-1_0"); err != nil || string(tag) != g.Manifest.Revisions[key("1.1").ID()].Event+"\n" {
+		t.Fatalf("tag does not name its revision event: %q %v", tag, err)
 	}
 	// Advancing the trunk moves the renamed branch.
 	before := refs["refs/heads/main"]

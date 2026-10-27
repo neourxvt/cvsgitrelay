@@ -87,7 +87,11 @@ a branch without a name) and a tag snapshot is `CVS tag <name>`. Names that
 cannot be shown as plain text are written as `hex:...`. Tags are published as
 `refs/tags/<name>`; a tag name that is not a safe ref name, such as one with
 `..`, a trailing `.lock` or unusual bytes, is published as
-`refs/tags/cvs-raw/<hex name>` instead. These commits are signed by
+`refs/tags/cvs-raw/<hex name>` instead. A tag sits on the history it was taken
+from: it names the event commit of the newest revision it selects when that
+commit has exactly the tagged tree, and otherwise a `CVS tag <name>` snapshot
+commit whose parent is that event commit. Format 2 tag snapshots stay parentless.
+These commits are signed by
 `CVSGITRELAY <relay@invalid>`, because CVS records neither who created a tag
 or branch nor when. The entry `"<relay>" = "Name <email>"` in the `[authors]`
 table replaces that identity. It then signs these commits as author and

@@ -249,20 +249,31 @@ func commitMessage(t *testing.T, g Generation, oid string) string {
 // metadata, and tags are plain refs under refs/tags/ when the name allows it.
 func TestV3TagsAndLinesAreReadable(t *testing.T) {
 	in := fixtureInventory3()
-	in.Symbols = append(in.Symbols, Symbol{"module/a", "REL-1_0", "1.1", false})
+	// Both files of mixed are on different lines, so no event has its tree.
+	in.Symbols = append(in.Symbols, Symbol{"module/a", "REL-1_0", "1.1", false}, Symbol{"module/a", "mi\xffxed", "1.1.2.1", false}, Symbol{"module/z/\xff", "mi\xffxed", "1.1", false})
 	p := policy3()
 	g, e := Build(in, p)
 	if e != nil {
 		t.Fatal(e)
 	}
-	tag := g.Manifest.Refs["refs/tags/REL-1_0"]
-	if tag == "" || commitMessage(t, g, tag) != "CVS tag REL-1_0\n" {
-		t.Fatalf("plain tag not readable: %q", commitMessage(t, g, tag))
+	// A tag whose tree a revision event already has names that event.
+	event := func(archive, number string) string {
+		return g.Manifest.Revisions[(Key{p.Source, archive, number}).ID()].Event
 	}
-	// The binary tag name keeps the hex ref and a hex marker in the message.
-	raw := g.Manifest.Refs["refs/tags/cvs-raw/"+Hex("tag\xff")]
-	if raw == "" || commitMessage(t, g, raw) != "CVS tag hex:"+Hex("tag\xff")+"\n" {
-		t.Fatalf("raw tag not published readably: %q", commitMessage(t, g, raw))
+	if tag := g.Manifest.Refs["refs/tags/REL-1_0"]; tag == "" || tag != event("module/a", "1.1") {
+		t.Fatalf("plain tag does not name its revision event: %q", tag)
+	}
+	if raw := g.Manifest.Refs["refs/tags/cvs-raw/"+Hex("tag\xff")]; raw == "" || raw != event("module/z/\xff", "1.1") {
+		t.Fatalf("raw tag does not name its revision event: %q", raw)
+	}
+	// Otherwise a commit on top of the newest selected revision records the
+	// snapshot, and a binary name gets a hex marker in its message.
+	mixed := g.Manifest.Refs["refs/tags/cvs-raw/"+Hex("mi\xffxed")]
+	if mixed == "" || commitMessage(t, g, mixed) != "CVS tag hex:"+Hex("mi\xffxed")+"\n" {
+		t.Fatalf("snapshot tag not published readably: %q", commitMessage(t, g, mixed))
+	}
+	if !bytes.Contains(g.Objects[mixed].Data, []byte("\nparent "+event("module/a", "1.1.2.1")+"\n")) || bytes.Count(g.Objects[mixed].Data, []byte("\nparent ")) != 1 {
+		t.Fatalf("snapshot tag is not based on its newest revision: %q", g.Objects[mixed].Data)
 	}
 	// The line of the aliases feature and alias is named after the first.
 	var messages []string
