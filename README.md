@@ -54,26 +54,25 @@ preserve the supported `rlog` output bytes, including its newline normalization.
 
 New destinations use format 3, where each event commit reads like a normal Git
 commit. The CVS log message is the commit message; Git shows its first line as
-the subject. A Git trailer block at the end of the message carries the exact
-provenance (source, archive, CVS revision, state, timestamp and author as hex),
-so verification still recovers every byte. A log that is empty, contains NUL
-bytes or is not valid UTF-8 is shown as readable substitute text, and its exact
-bytes move into a `Cvsgitrelay-Log:` hex trailer:
+the subject. One trailer line at the end names the CVS revision and archive,
+which is all that verification needs besides the Git author and commit time:
 
 ```text
 Author: root <root@cvs.invalid>
 
     Fix the build
 
-    Cvsgitrelay-Revision: v3
-    Cvsgitrelay-Source: 7363686d...
-    Cvsgitrelay-Archive: 727876...
-    Cvsgitrelay-CVS-Revision: 1.225
-    Cvsgitrelay-State: live
-    Cvsgitrelay-Timestamp: 1778790108
-    Cvsgitrelay-Author: 726f6f74
-    Cvsgitrelay-Log-Length: 14
+    CVS: 1.225 rxvt-unicode/doc/rxvtd.1.man.in
 ```
+
+Further trailer lines appear only when the commit header cannot carry the
+information. `CVS-Author:` names the CVS username when the `[authors]` table
+hides it, `CVS-State: dead` marks a removed file, and `CVS-Log:` restores the
+exact log when it needs to be stored differently. A log without a final newline
+is marked `CVS-Log: no-newline`. A log that is blank, contains NUL bytes or is
+not valid UTF-8 is shown as readable substitute text, and its exact bytes are
+kept as `CVS-Log: hex:...`. An archive path with unusual characters is written
+as `hex:...` too.
 
 The Git author is `<username> <<username>@cvs.invalid>`. The optional `[authors]`
 table in the TOML file maps CVS usernames to real identities instead. Usernames

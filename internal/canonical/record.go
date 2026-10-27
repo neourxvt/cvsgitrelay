@@ -115,7 +115,7 @@ func (p Policy) Validate() error {
 func (p Policy) Bytes() []byte {
 	author, version := "hex-author-v2", "2"
 	if p.Version() == 3 {
-		author, version = "mapped-author-v3", "3"
+		author, version = "mapped-author-compact-v3", "3"
 	}
 	var b []byte
 	for _, s := range []string{p.Source, p.Module, p.Submodules, "gnu-cvs-rlog-v2", "attic-strip-v2", "identical-membership-alias-v2", author, "100644", "kb", "cvs-exp-dead-absent-v2", version, "sha1", p.Verify} {

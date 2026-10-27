@@ -119,7 +119,7 @@ func (o Objects) Synthetic(tree string, parents []string, message string) string
 // RevisionMessage encodes a revision event message in the policy's format.
 func (p Policy) RevisionMessage(r Record) []byte {
 	if p.Version() == 3 {
-		return revisionMessageV3(r)
+		return revisionMessageV3(p, r)
 	}
 	return revisionMessageV2(r)
 }
@@ -128,51 +128,94 @@ func revisionMessageV2(r Record) []byte {
 	return []byte(fmt.Sprintf("cvsgitrelay-revision-v2\nsource=%s\narchive=%s\nrevision=%s\nstate=%s\ntimestamp=%d\nauthor=%s\nlog=%s\n", Hex(r.Key.Source), Hex(r.Key.Archive), r.Key.Number, r.State, r.Time, Hex(r.Author), hex.EncodeToString(r.Log)))
 }
 
-// Format 3 trailer lines, in order. The last line carries the log, either as
-// the byte length of the verbatim body or as hex when the body is substituted.
+// Format 3 trailer lines, in this order. Only the first line is always
+// present. The source and format come from the pinned policy, and the author
+// and time from the Git header, so they are not repeated here.
 const (
-	trailerPrefix    = "Cvsgitrelay-"
-	trailerLogLength = trailerPrefix + "Log-Length: "
-	trailerLogHex    = trailerPrefix + "Log: "
+	trailerRevision = "CVS: "
+	trailerAuthor   = "CVS-Author: "
+	trailerState    = "CVS-State: "
+	trailerLog      = "CVS-Log: "
+	// logNoNewline marks a verbatim log that does not end in a newline.
+	logNoNewline = "no-newline"
+	// hexPrefix marks a trailer value stored as hex because it is not
+	// plain text.
+	hexPrefix = "hex:"
 )
-
-var trailerNames = []string{"Revision", "Source", "Archive", "CVS-Revision", "State", "Timestamp", "Author"}
 
 // EmptyLogText replaces a log without visible text, so a commit never lacks
 // a subject line.
 const EmptyLogText = "(empty CVS log message)\n"
 
-// shownLog returns the message body. A valid UTF-8 log without NUL bytes and
-// with visible text is shown verbatim; anything else is shown as readable
-// substitute text, and the trailer then carries the exact bytes as hex.
-func shownLog(log []byte) (string, bool) {
-	if utf8.Valid(log) && bytes.IndexByte(log, 0) < 0 {
-		if len(bytes.TrimSpace(log)) == 0 {
-			return EmptyLogText, false
-		}
-		return string(log), true
+// shownLog returns the message body for a log and the CVS-Log trailer value
+// that restores the exact bytes; the value is empty when the body is the log
+// itself. A valid UTF-8 log without NUL bytes and with visible text is shown
+// verbatim. Anything else is shown as readable substitute text and its exact
+// bytes are kept as hex.
+func shownLog(log []byte) (shown, value string) {
+	switch {
+	case !utf8.Valid(log) || bytes.IndexByte(log, 0) >= 0:
+		shown = strings.ReplaceAll(strings.ToValidUTF8(string(log), "\uFFFD"), "\x00", "\uFFFD")
+	case len(bytes.TrimSpace(log)) == 0:
+		shown = EmptyLogText
+	case !bytes.HasSuffix(log, []byte("\n")):
+		return string(log), logNoNewline
+	default:
+		return string(log), ""
 	}
-	return strings.ReplaceAll(strings.ToValidUTF8(string(log), "\uFFFD"), "\x00", "\uFFFD"), false
+	return shown, hexPrefix + hex.EncodeToString(log)
+}
+
+// plainField reports whether a value can stand on a trailer line unchanged.
+func plainField(s string) bool {
+	if s == "" || !utf8.ValidString(s) || strings.HasPrefix(s, hexPrefix) || strings.TrimSpace(s) != s {
+		return false
+	}
+	for _, c := range s {
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// textField writes a value as plain text when possible, else as hex.
+func textField(s string) string {
+	if plainField(s) {
+		return s
+	}
+	return hexPrefix + Hex(s)
+}
+
+func parseTextField(v string) (string, error) {
+	if h, ok := strings.CutPrefix(v, hexPrefix); ok {
+		b, err := hex.DecodeString(h)
+		return string(b), err
+	}
+	return v, nil
 }
 
 // revisionMessageV3 puts the CVS log first, so Git shows it as the subject and
-// body, then a blank line and a Git trailer block with the exact provenance.
-func revisionMessageV3(r Record) []byte {
-	shown, verbatim := shownLog(r.Log)
+// body, then a blank line and one trailer line naming the archive and CVS
+// revision. Further trailer lines appear only for a mapped author, a dead
+// revision, or a log that cannot be shown verbatim.
+func revisionMessageV3(p Policy, r Record) []byte {
+	shown, logValue := shownLog(r.Log)
 	var b bytes.Buffer
 	b.WriteString(shown)
 	if !strings.HasSuffix(shown, "\n") {
 		b.WriteByte('\n')
 	}
 	b.WriteByte('\n')
-	values := []string{"v3", Hex(r.Key.Source), Hex(r.Key.Archive), r.Key.Number, r.State, strconv.FormatInt(r.Time, 10), Hex(r.Author)}
-	for i, name := range trailerNames {
-		fmt.Fprintf(&b, "%s%s: %s\n", trailerPrefix, name, values[i])
+	fmt.Fprintf(&b, "%s%s %s\n", trailerRevision, r.Key.Number, textField(r.Key.Archive))
+	if _, mapped := p.Authors[r.Author]; mapped {
+		fmt.Fprintf(&b, "%s%s\n", trailerAuthor, textField(r.Author))
 	}
-	if verbatim {
-		fmt.Fprintf(&b, "%s%d\n", trailerLogLength, len(r.Log))
-	} else {
-		fmt.Fprintf(&b, "%s%s\n", trailerLogHex, hex.EncodeToString(r.Log))
+	if r.State == "dead" {
+		fmt.Fprintf(&b, "%sdead\n", trailerState)
+	}
+	if logValue != "" {
+		fmt.Fprintf(&b, "%s%s\n", trailerLog, logValue)
 	}
 	return b.Bytes()
 }
@@ -249,23 +292,125 @@ func (o Objects) Anchor(tips []string) string {
 }
 
 // Revision provenance is strict: round-tripping rejects extra fields, alternate
-// hex/number spellings, and unrecognized versions or message boundaries.
+// hex/number spellings, and unrecognized versions or message boundaries. A
+// format 3 message does not carry the author and time, so it needs ParseEvent.
 func (p Policy) ParseRevisionMessage(b []byte) (Record, error) {
+	if p.Version() == 3 {
+		return Record{}, fmt.Errorf("format 3 messages need the commit author line")
+	}
+	r, err := parseRevisionFieldsV2(b)
+	if err != nil {
+		return r, err
+	}
+	return r, p.checkRevision(r, b)
+}
+
+// ParseEvent recovers a revision from an event commit's author identity, its
+// commit timestamp and its message, and requires all three to be exactly what
+// the policy would have written for that revision.
+func (p Policy) ParseEvent(identity string, timestamp int64, message []byte) (Record, error) {
 	var r Record
 	var err error
 	if p.Version() == 3 {
-		r, err = parseRevisionFieldsV3(b)
+		r, err = p.parseEventV3(identity, timestamp, message)
 	} else {
-		r, err = parseRevisionFieldsV2(b)
+		r, err = parseRevisionFieldsV2(message)
 	}
 	if err != nil {
 		return r, err
 	}
+	if r.Time != timestamp || p.EventAuthor(r.Author) != identity {
+		return r, fmt.Errorf("event header differs from its provenance")
+	}
+	return r, p.checkRevision(r, message)
+}
+
+func (p Policy) checkRevision(r Record, message []byte) error {
 	if err := validRevisionIdentity(r); err != nil {
+		return err
+	}
+	if !bytes.Equal(p.RevisionMessage(r), message) || (r.State != "live" && r.State != "dead") {
+		return fmt.Errorf("noncanonical revision message")
+	}
+	return nil
+}
+
+// AuthorLine splits an event commit's "author NAME <EMAIL> TIME +0000" line.
+func AuthorLine(line string) (identity string, timestamp int64, err error) {
+	rest, ok := strings.CutPrefix(line, "author ")
+	rest, ok2 := strings.CutSuffix(rest, " +0000")
+	space := strings.LastIndexByte(rest, ' ')
+	if !ok || !ok2 || space < 0 {
+		return "", 0, fmt.Errorf("invalid author line")
+	}
+	timestamp, err = strconv.ParseInt(rest[space+1:], 10, 64)
+	if err != nil || strconv.FormatInt(timestamp, 10) != rest[space+1:] {
+		return "", 0, fmt.Errorf("invalid author time")
+	}
+	return rest[:space], timestamp, nil
+}
+
+// decodeIdentity recovers the CVS username from an unmapped Git identity.
+func decodeIdentity(identity string) (string, error) {
+	if name, rest, ok := strings.Cut(identity, " <"); ok && rest == name+"@cvs.invalid>" {
+		return name, nil
+	}
+	if h, ok := strings.CutPrefix(identity, "CVS-"); ok {
+		if h, ok = strings.CutSuffix(h, " <cvs@invalid>"); ok {
+			b, err := hex.DecodeString(h)
+			return string(b), err
+		}
+	}
+	return "", fmt.Errorf("author is neither mapped nor a plain username")
+}
+
+// The trailer is the text after the last blank line, and the log is everything
+// before it, whatever that says. A message that is not exactly what
+// revisionMessageV3 writes for the recovered revision is rejected afterwards.
+func (p Policy) parseEventV3(identity string, timestamp int64, b []byte) (Record, error) {
+	i := bytes.LastIndex(b, []byte("\n\n"))
+	if i < 0 || !bytes.HasSuffix(b, []byte("\n")) {
+		return Record{}, fmt.Errorf("invalid revision message")
+	}
+	body, trailer := b[:i+1], strings.Split(strings.TrimSuffix(string(b[i+2:]), "\n"), "\n")
+	number, archive, ok := strings.Cut(strings.TrimPrefix(trailer[0], trailerRevision), " ")
+	if !strings.HasPrefix(trailer[0], trailerRevision) || !ok {
+		return Record{}, fmt.Errorf("invalid revision trailer")
+	}
+	r := Record{Key: Key{Source: p.Source, Number: number}, Time: timestamp, State: "live", Log: slices.Clone(body)}
+	var err error
+	if r.Key.Archive, err = parseTextField(archive); err != nil {
 		return r, err
 	}
-	if !bytes.Equal(p.RevisionMessage(r), b) || (r.State != "live" && r.State != "dead") {
-		return r, fmt.Errorf("noncanonical revision message")
+	// Optional lines follow the first one, each at most once and in order.
+	// Without an author line the Git author is a plain or hex username.
+	rest := trailer[1:]
+	if len(rest) > 0 && strings.HasPrefix(rest[0], trailerAuthor) {
+		if r.Author, err = parseTextField(strings.TrimPrefix(rest[0], trailerAuthor)); err != nil {
+			return r, err
+		}
+		rest = rest[1:]
+	} else if r.Author, err = decodeIdentity(identity); err != nil {
+		return r, err
+	}
+	if len(rest) > 0 && strings.HasPrefix(rest[0], trailerState) {
+		r.State, rest = strings.TrimPrefix(rest[0], trailerState), rest[1:]
+	}
+	if len(rest) > 0 && strings.HasPrefix(rest[0], trailerLog) {
+		value := strings.TrimPrefix(rest[0], trailerLog)
+		rest = rest[1:]
+		if value == logNoNewline {
+			r.Log = slices.Clone(body[:len(body)-1])
+		} else if h, ok := strings.CutPrefix(value, hexPrefix); ok {
+			if r.Log, err = hex.DecodeString(h); err != nil {
+				return r, err
+			}
+		} else {
+			return r, fmt.Errorf("invalid log trailer")
+		}
+	}
+	if len(rest) != 0 {
+		return r, fmt.Errorf("unrecognized trailer lines")
 	}
 	return r, nil
 }
@@ -289,45 +434,6 @@ func parseRevisionFieldsV2(b []byte) (Record, error) {
 		return Record{}, err
 	}
 	return decodeRevisionFields(values["source"], values["archive"], values["revision"], values["state"], values["timestamp"], values["author"], log)
-}
-
-// The trailer has a fixed number of lines at the end of the message, so it is
-// found from the end; everything before it is message body, whatever it says.
-func parseRevisionFieldsV3(b []byte) (Record, error) {
-	s, ok := strings.CutSuffix(string(b), "\n")
-	lines := strings.Split(s, "\n")
-	if !ok || len(lines) < len(trailerNames)+2 {
-		return Record{}, fmt.Errorf("invalid revision message")
-	}
-	trailer := lines[len(lines)-len(trailerNames)-1:]
-	values := make([]string, len(trailerNames))
-	for i, name := range trailerNames {
-		v, ok := strings.CutPrefix(trailer[i], trailerPrefix+name+": ")
-		if !ok {
-			return Record{}, fmt.Errorf("invalid field order")
-		}
-		values[i] = v
-	}
-	if values[0] != "v3" {
-		return Record{}, fmt.Errorf("invalid revision message version")
-	}
-	var log []byte
-	last := trailer[len(trailerNames)]
-	if v, ok := strings.CutPrefix(last, trailerLogLength); ok {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 || n > len(b) {
-			return Record{}, fmt.Errorf("invalid log length")
-		}
-		log = slices.Clone(b[:n])
-	} else if v, ok := strings.CutPrefix(last, trailerLogHex); ok {
-		var err error
-		if log, err = hex.DecodeString(v); err != nil {
-			return Record{}, err
-		}
-	} else {
-		return Record{}, fmt.Errorf("invalid log field")
-	}
-	return decodeRevisionFields(values[1], values[2], values[3], values[4], values[5], values[6], log)
 }
 
 func decodeRevisionFields(source, archive, number, state, timestamp, author string, log []byte) (Record, error) {

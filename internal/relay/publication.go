@@ -332,13 +332,18 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 		if !ok {
 			return fmt.Errorf("event message missing")
 		}
-		rev, e := r.Config.Policy.ParseRevisionMessage(message)
-		if e != nil || rev.Key.ID() != keys[event] {
-			return fmt.Errorf("event key mismatch")
-		}
 		lines := strings.Split(string(head), "\n")
 		if len(lines) != 4 || !strings.HasPrefix(lines[0], "tree ") || !strings.HasPrefix(lines[1], "parent ") {
 			return fmt.Errorf("invalid event ancestry")
+		}
+		// The author and time live in the Git header, not in the message.
+		identity, timestamp, e := canonical.AuthorLine(lines[2])
+		if e != nil {
+			return fmt.Errorf("invalid event author")
+		}
+		rev, e := r.Config.Policy.ParseEvent(identity, timestamp, message)
+		if e != nil || rev.Key.ID() != keys[event] {
+			return fmt.Errorf("event key mismatch")
 		}
 		expected := canonical.CommitBytes(strings.TrimPrefix(lines[0], "tree "), []string{strings.TrimPrefix(lines[1], "parent ")}, r.Config.Policy.EventAuthor(rev.Author), rev.Time, message)
 		if !bytes.Equal(data, expected) {

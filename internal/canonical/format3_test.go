@@ -45,6 +45,19 @@ func TestV3Golden(t *testing.T) {
 	}
 }
 
+// parseV3Event recovers an event from the pieces Git stores: the author line
+// of the commit header and its message.
+func parseV3Event(p Policy, commit []byte) (Record, []byte, error) {
+	head, message, _ := bytes.Cut(commit, []byte("\n\n"))
+	lines := strings.Split(string(head), "\n")
+	identity, timestamp, err := AuthorLine(lines[len(lines)-2])
+	if err != nil {
+		return Record{}, message, err
+	}
+	r, err := p.ParseEvent(identity, timestamp, message)
+	return r, message, err
+}
+
 // Every event shows its log as the subject and body, its author readably when
 // possible, and parses back to exactly the encoded provenance.
 func TestV3EventsAreReadable(t *testing.T) {
@@ -62,11 +75,11 @@ func TestV3EventsAreReadable(t *testing.T) {
 	events := 0
 	for _, o := range g.Objects {
 		head, message, ok := bytes.Cut(o.Data, []byte("\n\n"))
-		if o.Kind != "commit" || !ok || !bytes.Contains(message, []byte("\nCvsgitrelay-Revision: v3\n")) {
+		if o.Kind != "commit" || !ok || !bytes.Contains(message, []byte("\n\nCVS: ")) {
 			continue
 		}
 		events++
-		r, e := p.ParseRevisionMessage(message)
+		r, _, e := parseV3Event(p, o.Data)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -83,27 +96,51 @@ func TestV3EventsAreReadable(t *testing.T) {
 	}
 }
 
+// A typical event has a single trailer line; the others appear only when the
+// header cannot carry the information.
+func TestV3TrailerIsMinimal(t *testing.T) {
+	p := policy3()
+	r := record("dir/file", "1.29", "", 1234, "live", "")
+	r.Author, r.Log = "alice", []byte("Fix the build\n")
+	if got, want := string(p.RevisionMessage(r)), "Fix the build\n\nCVS: 1.29 module/dir/file\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	r.Author, r.State, r.Log = "bob", "dead", []byte("gone")
+	if got, want := string(p.RevisionMessage(r)), "gone\n\nCVS: 1.29 module/dir/file\nCVS-Author: bob\nCVS-State: dead\nCVS-Log: no-newline\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	r.Log = []byte("bad \xff\n")
+	if got, want := string(p.RevisionMessage(r)), "bad \uFFFD\n\nCVS: 1.29 module/dir/file\nCVS-Author: bob\nCVS-State: dead\nCVS-Log: hex:62616420ff0a\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 // Logs may contain anything, including text that imitates the trailer; the
 // trailer is located from the end, and each message round-trips exactly.
 func TestV3MessageRoundTrip(t *testing.T) {
 	p := policy3()
 	trailer := string(p.RevisionMessage(record("a", "1.1", "", 1, "live", "")))
 	logs := []string{"", "\n", " \t\n", "subject", "subject\n", "subject\n\n\n", "line\r\nnext\r\n", "caf\xc3\xa9\n", "bad \xff byte\n", "nul\x00byte\n",
-		"Cvsgitrelay-Log-Length: 3\n", trailer, "x\n\n" + trailer, strings.Repeat("long ", 1000)}
+		"CVS: 1.1 module/a\n", "CVS-Log: no-newline\n", "x\n\nCVS: 1.1 module/a\n", trailer, "x\n\n" + trailer, strings.TrimSuffix(trailer, "\n"), strings.Repeat("long ", 1000)}
+	paths := []string{"dir/file", "dir/my file", "hex:x/y", "dir/caf\xc3\xa9", "dir/\xff", "dir/ lead", "dir/trail ", "dir/ctl\x01", "dir/a\x7fb"}
 	for _, log := range logs {
 		for _, author := range []string{"alice", "bob", "x<y>", "a b"} {
-			r := record("dir/file", "1.2.2.1", "", 1234, "dead", "")
-			r.Author, r.Log = author, []byte(log)
-			message := p.RevisionMessage(r)
-			got, e := p.ParseRevisionMessage(message)
-			if e != nil {
-				t.Fatalf("log %q: %v\n%s", log, e, message)
-			}
-			if got.Key != r.Key || got.Author != r.Author || !bytes.Equal(got.Log, r.Log) || got.Time != r.Time || got.State != r.State {
-				t.Fatalf("log %q did not round-trip: %+v", log, got)
-			}
-			if bytes.IndexByte(message, 0) >= 0 || !ValidIdentity(p.EventAuthor(author)) {
-				t.Fatalf("message or author cannot be stored by Git: %q", p.EventAuthor(author))
+			for _, path := range paths {
+				for _, state := range []string{"live", "dead"} {
+					r := record(path, "1.2.2.1", "", 1234, state, "")
+					r.Author, r.Log = author, []byte(log)
+					message := p.RevisionMessage(r)
+					got, e := p.ParseEvent(p.EventAuthor(author), r.Time, message)
+					if e != nil {
+						t.Fatalf("log %q path %q: %v\n%s", log, path, e, message)
+					}
+					if got.Key != r.Key || got.Author != r.Author || !bytes.Equal(got.Log, r.Log) || got.Time != r.Time || got.State != r.State {
+						t.Fatalf("log %q did not round-trip: %+v", log, got)
+					}
+					if bytes.IndexByte(message, 0) >= 0 || !ValidIdentity(p.EventAuthor(author)) {
+						t.Fatalf("message or author cannot be stored by Git: %q", p.EventAuthor(author))
+					}
+				}
 			}
 		}
 	}
@@ -113,31 +150,60 @@ func TestV3NoncanonicalMessagesRejected(t *testing.T) {
 	p := policy3()
 	r := record("a", "1.1", "", 100, "live", "")
 	r.Author, r.Log = "alice", []byte("subject\n")
+	identity := p.EventAuthor("alice")
 	verbatim := string(p.RevisionMessage(r))
 	r.Log = []byte("bad \xff\n")
 	encoded := string(p.RevisionMessage(r))
+	r.Author, r.Log = "bob", []byte("subject\n")
+	mapped := string(p.RevisionMessage(r))
 	for _, s := range []string{
 		verbatim + "\n",
 		strings.Replace(verbatim, "subject\n\n", "subject\n", 1),
-		strings.Replace(verbatim, "Log-Length: 8", "Log-Length: 08", 1),
-		strings.Replace(verbatim, "Log-Length: 8", "Log: 7375626a6563740a", 1),
-		strings.Replace(verbatim, "Revision: v3", "Revision: v2", 1),
-		strings.Replace(verbatim, "Timestamp: 100", "Timestamp: 0100", 1),
-		strings.Replace(verbatim, "State: live", "State: Exp", 1),
-		strings.Replace(verbatim, "Cvsgitrelay-Author:", "Cvsgitrelay-Author: \nX:", 1),
+		strings.Replace(verbatim, "CVS: 1.1", "CVS: 01.1", 1),
+		strings.Replace(verbatim, "CVS: 1.1 ", "CVS: 1.1  ", 1),
+		strings.Replace(verbatim, "module/a", hexPrefix+Hex("module/a"), 1),
+		verbatim + "CVS-State: live\n",
+		verbatim + "CVS-State: dead\nCVS-State: dead\n",
+		verbatim + "CVS-Author: alice\n",
+		verbatim + "CVS-Log: hex:\n",
+		verbatim + "CVS-Log: 73\n",
+		verbatim + "Extra: x\n",
 		strings.Replace(encoded, "ff", "FF", 1),
 		strings.Replace(encoded, "bad \uFFFD", "bad ?", 1),
+		strings.Replace(mapped, "CVS: 1.1 module/a\nCVS-Author: bob\n", "CVS-Author: bob\nCVS: 1.1 module/a\n", 1),
 	} {
-		if _, e := p.ParseRevisionMessage([]byte(s)); e == nil {
+		if _, e := p.ParseEvent(identity, 100, []byte(s)); e == nil {
 			t.Fatalf("noncanonical provenance accepted:\n%s", s)
 		}
 	}
+	// A mapped author must be named in the message, since the header hides it.
+	if _, e := p.ParseEvent(p.EventAuthor("bob"), 100, []byte(mapped)); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := p.ParseEvent(p.EventAuthor("bob"), 100, []byte(strings.Replace(mapped, "CVS-Author: bob\n", "", 1))); e == nil {
+		t.Fatal("mapped author accepted without its trailer line")
+	}
+	// Without an author line the Git author names the CVS user, and only the
+	// canonical spelling is accepted. The time exists only in the header.
+	got, e := p.ParseEvent(identity, 100, []byte(verbatim))
+	if e != nil || got.Time != 100 || got.Author != "alice" {
+		t.Fatalf("%+v: %v", got, e)
+	}
+	for _, other := range []string{p.EventAuthor("bob"), "CVS-616c696365 <cvs@invalid>", "alice <carol@cvs.invalid>", "Alice <alice@cvs.invalid>"} {
+		if _, e := p.ParseEvent(other, 100, []byte(verbatim)); e == nil {
+			t.Fatalf("mismatching author accepted: %q", other)
+		}
+	}
 	// A format 2 destination never accepts a format 3 message, and vice versa.
-	if _, e := policy().ParseRevisionMessage([]byte(verbatim)); e == nil {
+	if _, e := policy().ParseEvent(identity, 100, []byte(verbatim)); e == nil {
 		t.Fatal("format 2 accepted a format 3 message")
 	}
-	if _, e := p.ParseRevisionMessage(policy().RevisionMessage(r)); e == nil {
+	r.Log = []byte("subject\n")
+	if _, e := p.ParseEvent(p.EventAuthor(r.Author), r.Time, policy().RevisionMessage(r)); e == nil {
 		t.Fatal("format 3 accepted a format 2 message")
+	}
+	if _, e := p.ParseRevisionMessage([]byte(verbatim)); e == nil {
+		t.Fatal("format 3 message parsed without its header")
 	}
 }
 

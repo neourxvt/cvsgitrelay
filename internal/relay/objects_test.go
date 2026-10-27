@@ -136,4 +136,13 @@ func TestFormat3EventsVerify(t *testing.T) {
 	if string(out) != want {
 		t.Fatalf("unexpected readable history:\n%s", out)
 	}
+	// Git shows the whole message: the log plus one provenance line, and a
+	// further line only for the mapped author.
+	message, err := r.git(ctx, nil, nil, "log", "--reverse", "--format=%B", "--grep=Fix the build", tip)
+	if err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	if want := "Fix the build\n\nDetails.\n\nCVS: 1.1 module/f\nCVS-Author: root\n\n"; string(message) != want {
+		t.Fatalf("unexpected message:\n%s", message)
+	}
 }
