@@ -81,7 +81,7 @@ form `CVS-<hex> <cvs@invalid>`. The author map is part of the canonical policy:
 it is fixed when the destination is initialized, and a different map requires a
 new destination.
 
-Synthetic commits are readable as well. The trunk starts with `CVS trunk`, a
+Synthetic commits are readable as well. The trunk starts with `Initial commit`, a
 branch with `CVS branch <name>` (`CVS unnamed branch <number> of <archive>` for
 a branch without a name) and a tag snapshot is `CVS tag <name>`. Names that
 cannot be shown as plain text are written as `hex:...`. Tags are published as

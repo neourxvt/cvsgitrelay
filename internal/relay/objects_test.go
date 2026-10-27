@@ -131,7 +131,7 @@ func TestFormat3EventsVerify(t *testing.T) {
 		t.Fatal(diag.Details(err, false))
 	}
 	// Each line starts from its synthetic root commit, which is unchanged.
-	want := "Release Bot <bot@example.com>|CVS trunk\nRoot User <root@example.com>|Fix the build\nalice <alice@cvs.invalid>|*** empty log message ***\nCVS-6f64642075736572 <cvs@invalid>|" + strings.TrimSuffix(canonical.EmptyLogText, "\n") +
+	want := "Release Bot <bot@example.com>|Initial commit\nRoot User <root@example.com>|Fix the build\nalice <alice@cvs.invalid>|*** empty log message ***\nCVS-6f64642075736572 <cvs@invalid>|" + strings.TrimSuffix(canonical.EmptyLogText, "\n") +
 		"\nRoot User <root@example.com>|no newline\nalice <alice@cvs.invalid>|bad � byte\nCVS-6f64642075736572 <cvs@invalid>|nul�\n"
 	if string(out) != want {
 		t.Fatalf("unexpected readable history:\n%s", out)

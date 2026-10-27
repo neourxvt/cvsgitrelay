@@ -267,11 +267,17 @@ func TestV3TagsAndLinesAreReadable(t *testing.T) {
 	// The line of the aliases feature and alias is named after the first.
 	var messages []string
 	for _, o := range g.Objects {
-		if o.Kind == "commit" && bytes.HasPrefix(o.Data[bytes.Index(o.Data, []byte("\n\n"))+2:], []byte("CVS ")) {
-			messages = append(messages, string(o.Data[bytes.Index(o.Data, []byte("\n\n"))+2:]))
+		if o.Kind != "commit" {
+			continue
+		}
+		// Skip revision events (they carry a "CVS:" trailer) and the internal
+		// anchor and state commits, which are never shown by Git.
+		m := string(o.Data[bytes.Index(o.Data, []byte("\n\n"))+2:])
+		if !strings.Contains(m, "\nCVS: ") && !strings.HasPrefix(m, "cvsgitrelay-") {
+			messages = append(messages, m)
 		}
 	}
-	for _, want := range []string{"CVS trunk\n", "CVS branch alias\n"} {
+	for _, want := range []string{"Initial commit\n", "CVS branch alias\n"} {
 		if !slices.Contains(messages, want) {
 			t.Errorf("no commit with message %q in %q", want, messages)
 		}
@@ -374,7 +380,7 @@ func TestV3SyntheticCommitsAreDatedFromData(t *testing.T) {
 			continue
 		}
 		switch commitMessage(t, g, oid) {
-		case "CVS trunk\n":
+		case "Initial commit\n":
 			// The oldest trunk revision is the dead 1.3, which carries time 99.
 			if got := commitTime(t, g, oid); got != 99 {
 				t.Errorf("trunk root dated %d, want 99", got)

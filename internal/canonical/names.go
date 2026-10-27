@@ -68,11 +68,13 @@ func (p Policy) tagMessage(name string) string {
 }
 
 // lineMessage is the format 3 message of the first commit of a project line,
-// with the trunk as a root and every other line as a branch seed.
+// with the trunk as a root and every other line as a branch seed. The root is
+// the first commit of the whole history, so it carries the message Git users
+// expect there.
 func (p Policy) lineMessage(line *projectLine) string {
 	switch {
 	case line.id == "trunk":
-		return "CVS trunk\n"
+		return "Initial commit\n"
 	case strings.HasPrefix(line.id, "named\x00"):
 		return "CVS branch " + textField(strings.TrimPrefix(line.id, "named\x00")) + "\n"
 	default:
