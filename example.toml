@@ -43,11 +43,14 @@ submodules = "exclude"
 # CLI override: --require-consecutive-revisions[=false]
 require_consecutive_revisions = false
 
+# [authors]
+# "<relay>" = "cvsgitrelay <cvsgitrelay@github.com>"
+
 [destination]
 # Required dedicated bare Git destination. Sync initializes it automatically.
 # Use a fresh directory; nonempty unmanaged repositories are rejected.
 # CLI override: --repo
-repo = "./git-rxvt-unicode-v2"
+repo = "./git-rxvt-unicode-v3"
 
 [sync]
 # V2 always imports the entire configured scope. Partial scopes are rejected.
