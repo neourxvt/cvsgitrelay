@@ -14,6 +14,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"cvsgitrelay/internal/canonical"
 	"cvsgitrelay/internal/diag"
 )
 
@@ -25,6 +26,9 @@ type Config struct {
 	Logging     Logging     `toml:"logging"`
 	Process     Process     `toml:"process"`
 	Debug       Debug       `toml:"debug"`
+	// Authors maps CVS usernames to "Name <email>" Git identities. It is fixed
+	// when a destination is initialized.
+	Authors map[string]string `toml:"authors"`
 }
 
 type Source struct {
@@ -161,6 +165,14 @@ func (c Config) Validate() error {
 	}
 	if c.Process.MaxOutput <= 0 {
 		return invalid("process.max_output", "output byte limit must be positive")
+	}
+	for name, identity := range c.Authors {
+		if name == "" || len(name) > canonical.MaxAuthor {
+			return invalid("authors", "CVS usernames must contain 1..256 bytes")
+		}
+		if !canonical.ValidIdentity(identity) {
+			return invalid("authors", "each identity must have the form \"Name <email>\" without angle brackets or line breaks inside")
+		}
 	}
 	if c.Debug.Failpoint != "" {
 		stage, ordinal, hasOrdinal := strings.Cut(strings.TrimPrefix(c.Debug.Failpoint, "kill:"), ":")

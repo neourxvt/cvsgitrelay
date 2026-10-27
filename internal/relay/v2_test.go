@@ -26,7 +26,7 @@ func openFixture(t testing.TB, root, verify string) *Repository {
 	t.Helper()
 	dest := filepath.Join(t.TempDir(), "mirror.git")
 	runner := testRunner()
-	if err := Init(context.Background(), runner, dest, root, "module", "test-source", "include", verify); err != nil {
+	if err := Init(context.Background(), runner, dest, root, "module", "test-source", "include", verify, nil); err != nil {
 		t.Fatal(diag.Details(err, false))
 	}
 	r, err := Open(context.Background(), runner, dest)

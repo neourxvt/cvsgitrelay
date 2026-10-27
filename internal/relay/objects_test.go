@@ -87,3 +87,53 @@ func TestBatchedObjectStore(t *testing.T) {
 		t.Fatal("state without objects accepted")
 	}
 }
+
+// Format 3 events must pass the reopened-state verifier and git fsck --strict
+// for every kind of log, and show readable authors and logs in git log.
+func TestFormat3EventsVerify(t *testing.T) {
+	ctx := context.Background()
+	runner := testRunner()
+	path := filepath.Join(t.TempDir(), "objects.git")
+	if _, err := runner.Run(ctx, "", nil, nil, "git", "init", "--bare", "--quiet", path); err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	policy := canonical.Policy{Source: "test-source", Module: "module", Submodules: "include", Verify: "full", Mappings: []canonical.Mapping{{Archive: "module"}},
+		Format: 3, Authors: map[string]string{"root": "Root User <root@example.com>"}}
+	r := &Repository{Path: path, Runner: runner, Config: Config{Version: 3, SourceID: policy.Source, Module: policy.Module, Policy: policy}}
+	logs := []string{"Fix the build\n\nDetails.\n", "*** empty log message ***\n", "", "no newline", "bad \xff byte\n", "nul\x00\n"}
+	authors := []string{"root", "alice", "odd user"}
+	var in canonical.Inventory
+	for i, log := range logs {
+		in.Records = append(in.Records, canonical.Record{Key: canonical.Key{Source: policy.Source, Archive: "module/f", Number: fmt.Sprintf("1.%d", i+1)}, Path: "f", Time: int64(i), Author: authors[i%len(authors)], Log: []byte(log), State: "live", Present: true, Content: []byte(fmt.Sprint(i))})
+		if i > 0 {
+			in.Records[i].Parent = &canonical.Key{Source: policy.Source, Archive: "module/f", Number: fmt.Sprintf("1.%d", i)}
+		}
+	}
+	g, err := canonical.Build(in, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.storeObjects(ctx, g.Objects, nil); err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	if _, err := r.readState(ctx, g.State); err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	// A format 2 reader must reject the same events.
+	v2 := *r
+	v2.Config.Version, v2.Config.Policy.Format, v2.Config.Policy.Authors = 2, 0, nil
+	if _, err := v2.readState(ctx, g.State); err == nil {
+		t.Fatal("format 2 verifier accepted format 3 events")
+	}
+	tip := g.Manifest.Refs[trunkRef]
+	out, err := r.git(ctx, nil, nil, "log", "--reverse", "--format=%an <%ae>|%s", tip)
+	if err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	// Each line starts from its synthetic root commit, which is unchanged.
+	want := "CVSGITRELAY <relay@invalid>|cvsgitrelay-root-v2 line=7472756e6b\nRoot User <root@example.com>|Fix the build\nalice <alice@cvs.invalid>|*** empty log message ***\nCVS-6f64642075736572 <cvs@invalid>|" + strings.TrimSuffix(canonical.EmptyLogText, "\n") +
+		"\nRoot User <root@example.com>|no newline\nalice <alice@cvs.invalid>|bad � byte\nCVS-6f64642075736572 <cvs@invalid>|nul�\n"
+	if string(out) != want {
+		t.Fatalf("unexpected readable history:\n%s", out)
+	}
+}

@@ -312,9 +312,16 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 
 // ValidateRequestedPolicy prevents a command-line policy change from silently
 // reinterpreting already accepted source records or the verification guarantee.
-func (r *Repository) ValidateRequestedPolicy(source, verify string) error {
+// The author map is fixed at init because it is part of every event commit.
+func (r *Repository) ValidateRequestedPolicy(source, verify string, authors map[string]string) error {
 	if source != r.Config.SourceID || verify != r.Config.Policy.Verify {
-		return diag.New("config", "source.policy", "source identity or verification policy differs from format v2 destination; use a new destination", nil)
+		return diag.New("config", "source.policy", "source identity or verification policy differs from the destination; use a new destination", nil)
+	}
+	if !maps.Equal(authors, r.Config.Policy.Authors) {
+		if r.Config.Version == 2 {
+			return diag.New("config", "source.policy", "author maps require a format 3 destination; use a new destination", nil)
+		}
+		return diag.New("config", "source.policy", "author map differs from the destination; use a new destination", nil)
 	}
 	return nil
 }

@@ -255,7 +255,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				} else if e := files.set(r.Path, blobs[r.Key.ID()]); e != nil {
 					return Generation{}, e
 				}
-				parent = g.Objects.Event(r, files.oid(), parent)
+				parent = g.Objects.Event(p, r, files.oid(), parent)
 				events[r.Key.ID()] = parent
 				g.Manifest.Revisions[r.Key.ID()] = RevisionEntry{r.Fingerprint(), parent}
 				for _, child := range waiting[r.Key.ID()] {

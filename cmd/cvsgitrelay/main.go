@@ -221,7 +221,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	if operation == "sync" {
 		// First sync provisions a new destination before opening it for import.
 		if _, statErr := os.Stat(filepath.Join(cfg.Destination.Repo, "cvsgitrelay.json")); os.IsNotExist(statErr) {
-			err = relay.Init(ctx, runner, cfg.Destination.Repo, cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.SourceID, cfg.Source.Submodules, cfg.Verify.Mode)
+			err = relay.Init(ctx, runner, cfg.Destination.Repo, cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.SourceID, cfg.Source.Submodules, cfg.Verify.Mode, cfg.Authors)
 		} else if statErr != nil {
 			err = diag.New("io", "sync.open", "cannot inspect destination configuration", statErr)
 		}
@@ -242,7 +242,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			defer repository.Close()
 			log = log.With("source_id", repository.Config.SourceID)
 			runner.Log = log
-			if err = repository.ValidateRequestedPolicy(cfg.Source.SourceID, cfg.Verify.Mode); err == nil {
+			if err = repository.ValidateRequestedPolicy(cfg.Source.SourceID, cfg.Verify.Mode, cfg.Authors); err == nil {
 				err = repository.ConfigureSource(cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.Submodules)
 			}
 			if err == nil {

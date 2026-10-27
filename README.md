@@ -48,6 +48,42 @@ numeric line and its declared forkpoint, including numbering gaps. Raw RCS delta
 links and original log-string encoding are not exposed by remote CVS. Logs
 preserve the supported `rlog` output bytes, including its newline normalization.
 
+New destinations use format 3, where each event commit reads like a normal Git
+commit. The CVS log message is the commit message; Git shows its first line as
+the subject. A Git trailer block at the end of the message carries the exact
+provenance (source, archive, CVS revision, state, timestamp and author as hex),
+so verification still recovers every byte. A log that is empty, contains NUL
+bytes or is not valid UTF-8 is shown as readable substitute text, and its exact
+bytes move into a `Cvsgitrelay-Log:` hex trailer:
+
+```text
+Author: root <root@cvs.invalid>
+
+    Fix the build
+
+    Cvsgitrelay-Revision: v3
+    Cvsgitrelay-Source: 7363686d...
+    Cvsgitrelay-Archive: 727876...
+    Cvsgitrelay-CVS-Revision: 1.225
+    Cvsgitrelay-State: live
+    Cvsgitrelay-Timestamp: 1778790108
+    Cvsgitrelay-Author: 726f6f74
+    Cvsgitrelay-Log-Length: 14
+```
+
+The Git author is `<username> <<username>@cvs.invalid>`. The optional `[authors]`
+table in the TOML file maps CVS usernames to real identities instead. Usernames
+that are neither mapped nor limited to letters, digits and `._+-` keep the hex
+form `CVS-<hex> <cvs@invalid>`. The author map is part of the canonical policy:
+it is fixed when the destination is initialized, and a different map requires a
+new destination. Synthetic commits (line roots, branch seeds, tags, anchors and
+state) are unchanged.
+
+Format 2 destinations, which use hex messages and `CVS-<hex>` authors, keep
+working unchanged; they cannot be converted in place. To switch, sync into a new
+`destination.repo`. Pointing `source.cvsroot` at a local `mirror` output makes
+that conversion read only local files.
+
 `verify.mode = "full"` is the default and is fixed in canonical policy. It detects
 changed historical bytes, log messages, authors, timestamps, states and ancestry,
 and missing revisions. Every unchanged run still re-fetches all live revision

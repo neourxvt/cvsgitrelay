@@ -209,8 +209,10 @@ func ownedNamespace(ref string) bool {
 	return strings.HasPrefix(ref, "refs/heads/cvs/") || strings.HasPrefix(ref, "refs/tags/cvs/") || strings.HasPrefix(ref, "refs/cvsgitrelay/")
 }
 
+// Format 2 destinations keep their hex revision events; new destinations use
+// format 3. The configuration and policy must agree on the format.
 func validateConfig(c Config) error {
-	if c.Version != 2 {
+	if (c.Version != 2 && c.Version != 3) || c.Version != c.Policy.Version() {
 		return diag.New("unsupported", "config.validate", "unsupported destination format", nil)
 	}
 	if c.SourceID != c.Policy.Source || c.Module != c.Policy.Module {
@@ -225,15 +227,16 @@ func validateConfig(c Config) error {
 
 // Init reserves only an empty dedicated destination. Initialization stores the
 // selected policy but does not publish a generation before a full source scan.
-func Init(ctx context.Context, runner *process.Runner, path, root, module, source, submodules, verification string) error {
-	r := &Repository{Config: Config{Version: 2, SourceID: source, CVSRoot: root, Module: module}, Runner: runner, Submodules: submodules}
+// New destinations use format 3; authors is its optional CVS username map.
+func Init(ctx context.Context, runner *process.Runner, path, root, module, source, submodules, verification string, authors map[string]string) error {
+	r := &Repository{Config: Config{Version: 3, SourceID: source, CVSRoot: root, Module: module}, Runner: runner, Submodules: submodules}
 	if _, err := sourceDirectory(root); err != nil {
 		return err
 	}
 	if err := modulePath(module); err != nil {
 		return err
 	}
-	initialPolicy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Mappings: []canonical.Mapping{{Archive: module}}}
+	initialPolicy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Mappings: []canonical.Mapping{{Archive: module}}, Format: 3, Authors: authors}
 	if err := initialPolicy.Validate(); err != nil {
 		return diag.New("config", "init.policy", "invalid canonical policy", err)
 	}
@@ -242,7 +245,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module, sourc
 		return err
 	}
 
-	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification}
+	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors}
 	for _, m := range layout {
 		policy.Mappings = append(policy.Mappings, canonical.Mapping{Archive: m.Source, Checkout: m.Destination})
 	}
@@ -341,7 +344,7 @@ func Open(ctx context.Context, runner *process.Runner, path string) (*Repository
 		return fail(err)
 	}
 	if string(format) != "reftable\n" {
-		return fail(diag.New("unsupported", "repository.refs", "v2 destinations require their initialized reftable backend", nil))
+		return fail(diag.New("unsupported", "repository.refs", "destinations require their initialized reftable backend", nil))
 	}
 	if err := r.recoverPublication(ctx); err != nil {
 		return fail(err)

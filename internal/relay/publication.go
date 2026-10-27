@@ -332,7 +332,7 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 		if !ok {
 			return fmt.Errorf("event message missing")
 		}
-		rev, e := canonical.ParseRevisionMessage(message)
+		rev, e := r.Config.Policy.ParseRevisionMessage(message)
 		if e != nil || rev.Key.ID() != keys[event] {
 			return fmt.Errorf("event key mismatch")
 		}
@@ -340,7 +340,7 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 		if len(lines) != 4 || !strings.HasPrefix(lines[0], "tree ") || !strings.HasPrefix(lines[1], "parent ") {
 			return fmt.Errorf("invalid event ancestry")
 		}
-		expected := canonical.CommitBytes(strings.TrimPrefix(lines[0], "tree "), []string{strings.TrimPrefix(lines[1], "parent ")}, "CVS-"+canonical.Hex(rev.Author)+" <cvs@invalid>", rev.Time, message)
+		expected := canonical.CommitBytes(strings.TrimPrefix(lines[0], "tree "), []string{strings.TrimPrefix(lines[1], "parent ")}, r.Config.Policy.EventAuthor(rev.Author), rev.Time, message)
 		if !bytes.Equal(data, expected) {
 			return fmt.Errorf("noncanonical event header")
 		}

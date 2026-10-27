@@ -77,8 +77,8 @@ func TestV2Golden(t *testing.T) {
 		}
 		_, message, ok := bytes.Cut(o.Data, []byte("\n\n"))
 		if ok && bytes.HasPrefix(message, []byte("cvsgitrelay-revision-v2\n")) {
-			r, e := ParseRevisionMessage(message)
-			if e != nil || !bytes.Equal(RevisionMessage(r), message) {
+			r, e := policy().ParseRevisionMessage(message)
+			if e != nil || !bytes.Equal(policy().RevisionMessage(r), message) {
 				t.Fatalf("message: %v", e)
 			}
 		}
@@ -301,9 +301,9 @@ func TestManifestAndProvenanceFailClosed(t *testing.T) {
 			t.Fatal("noncanonical manifest accepted")
 		}
 	}
-	message := string(RevisionMessage(fixtureInventory().Records[0]))
+	message := string(policy().RevisionMessage(fixtureInventory().Records[0]))
 	for _, s := range []string{message + "\n", strings.Replace(message, "timestamp=100", "timestamp=0100", 1), strings.Replace(message, "state=live", "state=Exp", 1), message + "extra=x\n", strings.Replace(message, "archive=", "unknown=", 1)} {
-		if _, e := ParseRevisionMessage([]byte(s)); e == nil {
+		if _, e := policy().ParseRevisionMessage([]byte(s)); e == nil {
 			t.Fatal("noncanonical provenance accepted")
 		}
 	}

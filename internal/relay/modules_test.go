@@ -75,7 +75,7 @@ func TestCompositeModuleImport(t *testing.T) {
 	ctx := context.Background()
 	runner := &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 16 << 20}
 	dest := filepath.Join(t.TempDir(), "mirror.git")
-	if err := Init(ctx, runner, dest, ":fork:"+root, "project", "composite-fixture", "include", "full"); err != nil {
+	if err := Init(ctx, runner, dest, ":fork:"+root, "project", "composite-fixture", "include", "full", nil); err != nil {
 		t.Fatal(err)
 	}
 	r, err := Open(ctx, runner, dest)

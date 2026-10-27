@@ -1,4 +1,4 @@
-# Import directly from remote CVS into a fresh v2 Git destination:
+# Import directly from remote CVS into a fresh (format 3) Git destination:
 #   ./cycle.sh example.toml
 #   ./cycle.sh status example.toml
 #   ./cycle.sh verify example.toml
@@ -105,6 +105,14 @@ max_output = 268435456
 # ORDINAL defaults to 1. kill: sends SIGKILL; otherwise exit 8.
 # CLI override: --failpoint
 failpoint = ""
+
+[authors]
+# Optional map from CVS usernames to Git author identities ("Name <email>").
+# Unmapped usernames become "<username> <<username>@cvs.invalid>". Quote
+# usernames that contain dots. The map is fixed when the destination is
+# initialized; a different map requires a new destination.
+# root = "Root User <root@example.com>"
+# "j.doe" = "Jane Doe <jane@example.com>"
 
 # Fixed v2 profiles: exact CVS -kb bytes, mode 100644, SHA-1 Git objects, ASCII
 # provenance and manifest, complete deterministic replay, single state-ref CAS.

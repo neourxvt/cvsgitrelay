@@ -30,6 +30,20 @@ type Policy struct {
 	Submodules string
 	Verify     string
 	Mappings   []Mapping
+	// Format selects the revision event encoding. Zero is format 2, which
+	// predates this field, so existing configurations keep their encoding.
+	Format int `json:",omitempty"`
+	// Authors maps raw CVS usernames to "Name <email>" Git identities. Only
+	// format 3 supports it; like the rest of the policy it is fixed at init.
+	Authors map[string]string `json:",omitempty"`
+}
+
+// Version returns the destination format number this policy encodes.
+func (p Policy) Version() int {
+	if p.Format == 0 {
+		return 2
+	}
+	return p.Format
 }
 
 func U(n uint64) []byte     { return binary.BigEndian.AppendUint64(nil, n) }
@@ -60,6 +74,20 @@ func (p Policy) Validate() error {
 	if p.Verify != "full" && p.Verify != "trust-append-only" {
 		return fmt.Errorf("invalid verification policy")
 	}
+	if p.Format != 0 && p.Format != 3 {
+		return fmt.Errorf("unsupported destination format")
+	}
+	if len(p.Authors) > 0 && p.Version() != 3 {
+		return fmt.Errorf("author maps require destination format 3")
+	}
+	for name, identity := range p.Authors {
+		if len(name) == 0 || len(name) > MaxAuthor {
+			return fmt.Errorf("author map usernames must contain 1..%d bytes", MaxAuthor)
+		}
+		if !ValidIdentity(identity) {
+			return fmt.Errorf("author map identity must have the form \"Name <email>\"")
+		}
+	}
 	if len(p.Mappings) == 0 {
 		return fmt.Errorf("explicit archive mapping required")
 	}
@@ -82,15 +110,29 @@ func (p Policy) Validate() error {
 	return nil
 }
 
+// Format 2 bytes are unchanged from before format 3 existed. Format 3 names
+// its author profile and version, and appends the sorted author map.
 func (p Policy) Bytes() []byte {
+	author, version := "hex-author-v2", "2"
+	if p.Version() == 3 {
+		author, version = "mapped-author-v3", "3"
+	}
 	var b []byte
-	for _, s := range []string{p.Source, p.Module, p.Submodules, "gnu-cvs-rlog-v2", "attic-strip-v2", "identical-membership-alias-v2", "hex-author-v2", "100644", "kb", "cvs-exp-dead-absent-v2", "2", "sha1", p.Verify} {
+	for _, s := range []string{p.Source, p.Module, p.Submodules, "gnu-cvs-rlog-v2", "attic-strip-v2", "identical-membership-alias-v2", author, "100644", "kb", "cvs-exp-dead-absent-v2", version, "sha1", p.Verify} {
 		b = append(b, frame(s)...)
 	}
 	b = append(b, U(uint64(len(p.Mappings)))...)
 	for _, m := range p.Mappings {
 		b = append(b, frame(m.Archive)...)
 		b = append(b, frame(m.Checkout)...)
+	}
+	if p.Version() == 3 {
+		names := SortedKeys(p.Authors)
+		b = append(b, U(uint64(len(names)))...)
+		for _, name := range names {
+			b = append(b, frame(name)...)
+			b = append(b, frame(p.Authors[name])...)
+		}
 	}
 	return b
 }
