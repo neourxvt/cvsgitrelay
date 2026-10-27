@@ -87,8 +87,13 @@ a branch without a name) and a tag snapshot is `CVS tag <name>`. Names that
 cannot be shown as plain text are written as `hex:...`. Tags are published as
 `refs/tags/<name>`; a tag name that is not a safe ref name, such as one with
 `..`, a trailing `.lock` or unusual bytes, is published as
-`refs/tags/cvs-raw/<hex name>` instead. Anchor and state commits stay hex, since
-no branch or tag reaches them.
+`refs/tags/cvs-raw/<hex name>` instead. These commits are signed by
+`CVSGITRELAY <relay@invalid>`, because CVS records neither who created a tag
+or branch nor when. Their date comes from the data instead: a tag is dated by
+the newest revision it selects, a branch start by the newest fork point among
+its files, and the trunk start by the oldest trunk revision. Anchor and state
+commits stay hex and use the fixed date 2000-01-01, since no branch or tag
+reaches them.
 
 Format 2 destinations, which use hex messages and `CVS-<hex>` authors, keep
 working unchanged; they cannot be converted in place. To switch, sync into a new

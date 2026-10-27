@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -329,5 +330,68 @@ func TestV3TagRefs(t *testing.T) {
 	}
 	if ref, _ := policy().TagRef("RELEASE"); ref != "refs/tags/cvs/b"+Hex("RELEASE") {
 		t.Fatalf("format 2 ref %q", ref)
+	}
+}
+
+// commitTime returns the committer timestamp of a commit object.
+func commitTime(t *testing.T, g Generation, oid string) int64 {
+	t.Helper()
+	for _, line := range strings.Split(string(g.Objects[oid].Data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "committer "); ok {
+			fields := strings.Fields(rest)
+			n, err := strconv.ParseInt(fields[len(fields)-2], 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+	}
+	t.Fatalf("commit %s has no committer", oid)
+	return 0
+}
+
+// Format 3 dates synthetic commits from the data they snapshot: a tag by its
+// newest selected revision, a branch seed by its newest fork point and the
+// trunk root by its oldest revision. Format 2 keeps the fixed date.
+func TestV3SyntheticCommitsAreDatedFromData(t *testing.T) {
+	in := fixtureInventory3()
+	// The tag selects revisions from the times 99 (dead 1.3 of a), 100 and 101.
+	in.Symbols = append(in.Symbols, Symbol{"module/a", "mixed", "1.1.2.1", false}, Symbol{"module/z/\xff", "mixed", "1.1", false})
+	g, e := Build(in, policy3())
+	if e != nil {
+		t.Fatal(e)
+	}
+	ref, _ := policy3().TagRef("mixed")
+	if got := commitTime(t, g, g.Manifest.Refs[ref]); got != 101 {
+		t.Errorf("tag dated %d, want the newest selected revision 101", got)
+	}
+	tagRaw, _ := policy3().TagRef("tag\xff")
+	if got := commitTime(t, g, g.Manifest.Refs[tagRaw]); got != 100 {
+		t.Errorf("tag dated %d, want 100", got)
+	}
+	for oid, o := range g.Objects {
+		if o.Kind != "commit" {
+			continue
+		}
+		switch commitMessage(t, g, oid) {
+		case "CVS trunk\n":
+			// The oldest trunk revision is the dead 1.3, which carries time 99.
+			if got := commitTime(t, g, oid); got != 99 {
+				t.Errorf("trunk root dated %d, want 99", got)
+			}
+		case "CVS branch alias\n":
+			if got := commitTime(t, g, oid); got != 100 {
+				t.Errorf("branch seed dated %d, want its fork point's 100", got)
+			}
+		}
+	}
+	g2, e := Build(fixtureInventory(), policy())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for oid, o := range g2.Objects {
+		if o.Kind == "commit" && bytes.Contains(o.Data, []byte("\nauthor "+Identity+" ")) && commitTime(t, g2, oid) != SyntheticTime {
+			t.Errorf("format 2 synthetic commit not at the fixed date: %s", oid)
+		}
 	}
 }

@@ -194,11 +194,11 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			files := newLineTree(g.Objects)
 			var parent string
 			if id == "trunk" {
-				message := "cvsgitrelay-root-v2\nline=" + Hex(id) + "\n"
+				message, when := "cvsgitrelay-root-v2\nline="+Hex(id)+"\n", SyntheticTime
 				if p.Version() == 3 {
-					message = p.lineMessage(line)
+					message, when = p.lineMessage(line), lineTime(line)
 				}
-				parent = g.Objects.Synthetic(files.oid(), nil, message)
+				parent = g.Objects.SyntheticAt(files.oid(), nil, message, when)
 			} else {
 				var anchor *Record
 				var pairs []string
@@ -225,14 +225,15 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				for _, pair := range pairs {
 					message += "member=" + Hex(pair) + "\n"
 				}
+				when := SyntheticTime
 				if p.Version() == 3 {
-					message = p.lineMessage(line)
+					message, when = p.lineMessage(line), lineTime(line)
 				}
 				anchorOID := events[anchor.Key.ID()]
 				if anchorOID == "" {
 					return Generation{}, fmt.Errorf("unresolved seed anchor")
 				}
-				parent = g.Objects.Synthetic(files.oid(), []string{anchorOID}, message)
+				parent = g.Objects.SyntheticAt(files.oid(), []string{anchorOID}, message, when)
 			}
 			var pending []Record
 			for _, f := range line.members {
@@ -334,10 +335,11 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			return Generation{}, e
 		}
 		message := "cvsgitrelay-tag-v2\nname=" + Hex(name) + "\nselection-sha256=" + Hash("cvsgitrelay-tag-selection-v2", b) + "\n"
+		when := SyntheticTime
 		if p.Version() == 3 {
-			message = p.tagMessage(name)
+			message, when = p.tagMessage(name), tagTime(selected)
 		}
-		oid := g.Objects.Synthetic(tree, nil, message)
+		oid := g.Objects.SyntheticAt(tree, nil, message, when)
 		ref, e := p.TagRef(name)
 		if e != nil {
 			return Generation{}, e

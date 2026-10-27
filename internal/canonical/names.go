@@ -80,3 +80,41 @@ func (p Policy) lineMessage(line *projectLine) string {
 		return "CVS unnamed branch " + f.number + " of " + textField(f.archive) + "\n"
 	}
 }
+
+// Format 3 dates a synthetic commit from the data it snapshots, so that it
+// sorts at the matching point of the history. The relay still signs it.
+
+// lineTime is the time of the first commit of a line: the trunk root is as old
+// as the oldest trunk revision, and a branch seed as new as the newest fork
+// point among its files, since its tree holds them all.
+func lineTime(line *projectLine) int64 {
+	var t int64
+	set := false
+	for _, f := range line.members {
+		switch {
+		case line.id == "trunk":
+			for _, r := range f.events {
+				if !set || r.Time < t {
+					t, set = r.Time, true
+				}
+			}
+		case f.fork != nil:
+			if !set || f.fork.Time > t {
+				t, set = f.fork.Time, true
+			}
+		}
+	}
+	if !set {
+		return SyntheticTime
+	}
+	return t
+}
+
+// tagTime is the time of the newest revision a tag snapshot selects.
+func tagTime(selected []Record) int64 {
+	t := selected[0].Time
+	for _, r := range selected[1:] {
+		t = max(t, r.Time)
+	}
+	return t
+}

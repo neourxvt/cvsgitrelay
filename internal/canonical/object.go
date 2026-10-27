@@ -113,7 +113,13 @@ func CommitBytes(tree string, parents []string, author string, timestamp int64, 
 	return b.Bytes()
 }
 func (o Objects) Synthetic(tree string, parents []string, message string) string {
-	return o.Put("commit", CommitBytes(tree, parents, Identity, SyntheticTime, []byte(message)))
+	return o.SyntheticAt(tree, parents, message, SyntheticTime)
+}
+
+// SyntheticAt is Synthetic with an explicit timestamp, which format 3 takes
+// from the source data instead of using the fixed one.
+func (o Objects) SyntheticAt(tree string, parents []string, message string, timestamp int64) string {
+	return o.Put("commit", CommitBytes(tree, parents, Identity, timestamp, []byte(message)))
 }
 
 // RevisionMessage encodes a revision event message in the policy's format.
