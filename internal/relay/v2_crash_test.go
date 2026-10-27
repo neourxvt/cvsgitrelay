@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 
@@ -160,12 +159,7 @@ func TestV2FailedReadsAndProjectionDeletion(t *testing.T) {
 		t.Fatal(diag.Details(err, false))
 	}
 	defer r.Close()
-	for ref := range r.Manifest.Refs {
-		if strings.HasPrefix(ref, "refs/tags/cvs/") {
-			decoded := strings.TrimPrefix(ref, "refs/tags/cvs/b")
-			if decoded == canonical.Hex("RELEASE") {
-				t.Fatal("deleted tag survived recovery")
-			}
-		}
+	if ref, _ := r.Config.Policy.TagRef("RELEASE"); r.Manifest.Refs[ref] != "" {
+		t.Fatal("deleted tag survived recovery")
 	}
 }

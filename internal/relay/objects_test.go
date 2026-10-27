@@ -131,7 +131,7 @@ func TestFormat3EventsVerify(t *testing.T) {
 		t.Fatal(diag.Details(err, false))
 	}
 	// Each line starts from its synthetic root commit, which is unchanged.
-	want := "CVSGITRELAY <relay@invalid>|cvsgitrelay-root-v2 line=7472756e6b\nRoot User <root@example.com>|Fix the build\nalice <alice@cvs.invalid>|*** empty log message ***\nCVS-6f64642075736572 <cvs@invalid>|" + strings.TrimSuffix(canonical.EmptyLogText, "\n") +
+	want := "CVSGITRELAY <relay@invalid>|CVS trunk\nRoot User <root@example.com>|Fix the build\nalice <alice@cvs.invalid>|*** empty log message ***\nCVS-6f64642075736572 <cvs@invalid>|" + strings.TrimSuffix(canonical.EmptyLogText, "\n") +
 		"\nRoot User <root@example.com>|no newline\nalice <alice@cvs.invalid>|bad � byte\nCVS-6f64642075736572 <cvs@invalid>|nul�\n"
 	if string(out) != want {
 		t.Fatalf("unexpected readable history:\n%s", out)
@@ -170,7 +170,7 @@ func TestBranchMapPublication(t *testing.T) {
 	first := key("1.1")
 	inventory := func(extra ...canonical.Record) canonical.Inventory {
 		in := canonical.Inventory{Records: append([]canonical.Record{record("1.1", nil, 1), record("1.1.2.1", &first, 2)}, extra...)}
-		in.Symbols = []canonical.Symbol{{Archive: "module/f", Name: "dev", Target: "1.1.2", Branch: true}, {Archive: "module/f", Name: "unselected", Target: "1.1.2", Branch: true}}
+		in.Symbols = []canonical.Symbol{{Archive: "module/f", Name: "dev", Target: "1.1.2", Branch: true}, {Archive: "module/f", Name: "unselected", Target: "1.1.2", Branch: true}, {Archive: "module/f", Name: "REL-1_0", Target: "1.1"}}
 		return in
 	}
 	publish := func(in canonical.Inventory) canonical.Generation {
@@ -195,6 +195,10 @@ func TestBranchMapPublication(t *testing.T) {
 		if strings.HasPrefix(ref, "refs/heads/cvs/") {
 			t.Fatalf("unmapped ref %s published", ref)
 		}
+	}
+	// Tags are plain refs and show their name in Git.
+	if subject, err := r.git(ctx, nil, nil, "log", "-1", "--format=%s", "refs/tags/REL-1_0"); err != nil || string(subject) != "CVS tag REL-1_0\n" {
+		t.Fatalf("tag not readable: %q %v", subject, err)
 	}
 	// Advancing the trunk moves the renamed branch.
 	before := refs["refs/heads/main"]

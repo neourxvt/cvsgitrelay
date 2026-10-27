@@ -216,7 +216,7 @@ func decodeJSON(data []byte, dst any) error {
 // ownedRef reports whether the exporter owns a ref: its reserved namespaces
 // and the Git branches named by the policy's branch map.
 func (r *Repository) ownedRef(ref string) bool {
-	return strings.HasPrefix(ref, "refs/heads/cvs/") || strings.HasPrefix(ref, "refs/tags/cvs/") || strings.HasPrefix(ref, "refs/cvsgitrelay/") || r.Config.Policy.MappedBranchRef(ref)
+	return strings.HasPrefix(ref, "refs/heads/cvs/") || r.Config.Policy.IsTagRef(ref) || strings.HasPrefix(ref, "refs/cvsgitrelay/") || r.Config.Policy.MappedBranchRef(ref)
 }
 
 // Format 2 destinations keep their hex revision events; new destinations use

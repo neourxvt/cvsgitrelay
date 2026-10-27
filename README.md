@@ -79,8 +79,16 @@ table in the TOML file maps CVS usernames to real identities instead. Usernames
 that are neither mapped nor limited to letters, digits and `._+-` keep the hex
 form `CVS-<hex> <cvs@invalid>`. The author map is part of the canonical policy:
 it is fixed when the destination is initialized, and a different map requires a
-new destination. Synthetic commits (line roots, branch seeds, tags, anchors and
-state) are unchanged.
+new destination.
+
+Synthetic commits are readable as well. The trunk starts with `CVS trunk`, a
+branch with `CVS branch <name>` (`CVS unnamed branch <number> of <archive>` for
+a branch without a name) and a tag snapshot is `CVS tag <name>`. Names that
+cannot be shown as plain text are written as `hex:...`. Tags are published as
+`refs/tags/<name>`; a tag name that is not a safe ref name, such as one with
+`..`, a trailing `.lock` or unusual bytes, is published as
+`refs/tags/cvs-raw/<hex name>` instead. Anchor and state commits stay hex, since
+no branch or tag reaches them.
 
 Format 2 destinations, which use hex messages and `CVS-<hex>` authors, keep
 working unchanged; they cannot be converted in place. To switch, sync into a new
@@ -114,7 +122,9 @@ Branches and tags are eventually reconciled projections:
 
 - `refs/heads/cvs/trunk`
 - `refs/heads/cvs/b<hex raw branch name>` for every named branch alias
-- `refs/tags/cvs/b<hex raw tag name>` for exact per-file tag snapshots
+- `refs/tags/<tag name>` for exact per-file tag snapshots, or
+  `refs/tags/cvs-raw/<hex raw tag name>` when the name is not a safe ref name
+  (format 2: `refs/tags/cvs/b<hex raw tag name>`)
 - `refs/cvsgitrelay/lines/b<hex logical line ID>` for every line
 
 The optional `[branches]` table selects and renames the branch projections.
@@ -142,7 +152,7 @@ git show "$generation:manifest.v2"
 Consumers tracking project branches must explicitly allow non-fast-forward fetches:
 
 ```sh
-git fetch mirror '+refs/heads/cvs/*:refs/remotes/cvs/*' '+refs/tags/cvs/*:refs/tags/cvs/*'
+git fetch mirror '+refs/heads/cvs/*:refs/remotes/cvs/*' '+refs/tags/*:refs/tags/*'
 ```
 
 Publication requires a reliable shared-filesystem writer lock. A separate Git

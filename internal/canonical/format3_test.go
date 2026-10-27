@@ -3,6 +3,7 @@ package canonical
 import (
 	"bytes"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -230,5 +231,103 @@ func TestV3PolicyAuthors(t *testing.T) {
 	plain.Authors = nil
 	if p.Digest() == other.Digest() || p.Digest() == plain.Digest() || plain.Digest() == policy().Digest() {
 		t.Fatal("author map or format does not change the policy digest")
+	}
+}
+
+// commitMessage returns the message of a commit object.
+func commitMessage(t *testing.T, g Generation, oid string) string {
+	t.Helper()
+	_, message, ok := bytes.Cut(g.Objects[oid].Data, []byte("\n\n"))
+	if !ok {
+		t.Fatalf("commit %s has no message", oid)
+	}
+	return string(message)
+}
+
+// Tags and the first commits of lines show their names instead of hex
+// metadata, and tags are plain refs under refs/tags/ when the name allows it.
+func TestV3TagsAndLinesAreReadable(t *testing.T) {
+	in := fixtureInventory3()
+	in.Symbols = append(in.Symbols, Symbol{"module/a", "REL-1_0", "1.1", false})
+	p := policy3()
+	g, e := Build(in, p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	tag := g.Manifest.Refs["refs/tags/REL-1_0"]
+	if tag == "" || commitMessage(t, g, tag) != "CVS tag REL-1_0\n" {
+		t.Fatalf("plain tag not readable: %q", commitMessage(t, g, tag))
+	}
+	// The binary tag name keeps the hex ref and a hex marker in the message.
+	raw := g.Manifest.Refs["refs/tags/cvs-raw/"+Hex("tag\xff")]
+	if raw == "" || commitMessage(t, g, raw) != "CVS tag hex:"+Hex("tag\xff")+"\n" {
+		t.Fatalf("raw tag not published readably: %q", commitMessage(t, g, raw))
+	}
+	// The line of the aliases feature and alias is named after the first.
+	var messages []string
+	for _, o := range g.Objects {
+		if o.Kind == "commit" && bytes.HasPrefix(o.Data[bytes.Index(o.Data, []byte("\n\n"))+2:], []byte("CVS ")) {
+			messages = append(messages, string(o.Data[bytes.Index(o.Data, []byte("\n\n"))+2:]))
+		}
+	}
+	for _, want := range []string{"CVS trunk\n", "CVS branch alias\n"} {
+		if !slices.Contains(messages, want) {
+			t.Errorf("no commit with message %q in %q", want, messages)
+		}
+	}
+	for _, m := range messages {
+		if strings.Contains(m, "cvsgitrelay-") || strings.Contains(m, "sha256") {
+			t.Errorf("synthetic message is not readable: %q", m)
+		}
+	}
+	// Format 2 keeps its hex metadata and refs.
+	g2, e := Build(fixtureInventory(), policy())
+	if e != nil {
+		t.Fatal(e)
+	}
+	if g2.Manifest.Refs["refs/tags/cvs/b"+Hex("tag\xff")] == "" {
+		t.Fatal("format 2 tag ref changed")
+	}
+	// Both manifests parse back under their own policy only.
+	if _, e := p.ParseManifest(g.Manifest.Bytes()); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := ParseManifest(g.Manifest.Bytes()); e == nil {
+		t.Fatal("format 2 parser accepted format 3 tag refs")
+	}
+}
+
+// TagRef must stay a valid, collision-free ref for every name.
+func TestV3TagRefs(t *testing.T) {
+	p := policy3()
+	seen := map[string]string{}
+	for name, want := range map[string]string{
+		"rxvt-unicode-rel-9_19": "refs/tags/rxvt-unicode-rel-9_19",
+		"REL1.0":                "refs/tags/REL1.0",
+		"a..b":                  "refs/tags/cvs-raw/" + Hex("a..b"),
+		"a.lock":                "refs/tags/cvs-raw/" + Hex("a.lock"),
+		"a.":                    "refs/tags/cvs-raw/" + Hex("a."),
+		"-x":                    "refs/tags/cvs-raw/" + Hex("-x"),
+		"a/b":                   "refs/tags/cvs-raw/" + Hex("a/b"),
+		"a b":                   "refs/tags/cvs-raw/" + Hex("a b"),
+		"cvs-raw":               "refs/tags/cvs-raw/" + Hex("cvs-raw"),
+		"\xff":                  "refs/tags/cvs-raw/ff",
+	} {
+		ref, e := p.TagRef(name)
+		if e != nil || ref != want || !validTagRef(ref) {
+			t.Errorf("TagRef(%q) = %q, %v; want %q", name, ref, e, want)
+		}
+		if other, dup := seen[ref]; dup {
+			t.Errorf("%q and %q share %s", name, other, ref)
+		}
+		seen[ref] = name
+	}
+	for _, bad := range []string{"refs/tags/", "refs/tags/cvs-raw/", "refs/tags/cvs-raw/zz", "refs/tags/cvs-raw/" + Hex("plain"), "refs/tags/a..b", "refs/tags/cvs-raw", "refs/heads/x"} {
+		if validTagRef(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if ref, _ := policy().TagRef("RELEASE"); ref != "refs/tags/cvs/b"+Hex("RELEASE") {
+		t.Fatalf("format 2 ref %q", ref)
 	}
 }

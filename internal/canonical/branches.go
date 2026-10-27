@@ -65,7 +65,9 @@ func (p Policy) HeadRef() string {
 // ParseManifest is ParseManifest for manifests produced under this policy,
 // whose projections may include mapped branch refs.
 func (p Policy) ParseManifest(b []byte) (Manifest, error) {
-	return parseManifest(b, func(ref string) bool { return ProjectionRef(ref) || p.MappedBranchRef(ref) })
+	return parseManifest(b, func(ref string) bool {
+		return ProjectionRef(ref) || p.MappedBranchRef(ref) || (p.Version() == 3 && validTagRef(ref))
+	})
 }
 
 // ValidBranchName applies the rules of git check-ref-format to a branch name

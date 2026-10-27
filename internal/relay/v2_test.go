@@ -183,7 +183,7 @@ func TestV2FreshIncrementalConvergenceAndSymbols(t *testing.T) {
 	if fresh.StateOID != r.StateOID || !maps.Equal(fresh.Manifest.Refs, r.Manifest.Refs) || !maps.Equal(fresh.Manifest.Revisions, r.Manifest.Revisions) {
 		t.Fatal("incremental and fresh differ")
 	}
-	ref, _ := canonical.EncodedRef("refs/tags/cvs/", "RELEASE")
+	ref, _ := r.Config.Policy.TagRef("RELEASE")
 	if r.Manifest.Refs[ref] == "" {
 		t.Fatal("tag snapshot absent")
 	}

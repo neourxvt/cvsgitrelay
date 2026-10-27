@@ -279,7 +279,7 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 		tips = append(tips, tip)
 	}
 	for ref, tip := range m.Refs {
-		if strings.HasPrefix(ref, "refs/tags/cvs/") {
+		if r.Config.Policy.IsTagRef(ref) {
 			tips = append(tips, tip)
 		} else if !slices.Contains(tips, tip) {
 			found := false

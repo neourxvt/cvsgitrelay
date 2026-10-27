@@ -194,7 +194,11 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			files := newLineTree(g.Objects)
 			var parent string
 			if id == "trunk" {
-				parent = g.Objects.Synthetic(files.oid(), nil, "cvsgitrelay-root-v2\nline="+Hex(id)+"\n")
+				message := "cvsgitrelay-root-v2\nline=" + Hex(id) + "\n"
+				if p.Version() == 3 {
+					message = p.lineMessage(line)
+				}
+				parent = g.Objects.Synthetic(files.oid(), nil, message)
 			} else {
 				var anchor *Record
 				var pairs []string
@@ -220,6 +224,9 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				message := "cvsgitrelay-seed-v2\nline=" + Hex(id) + "\nforkpoint-anchor=" + Hex(anchor.Key.ID()) + "\n"
 				for _, pair := range pairs {
 					message += "member=" + Hex(pair) + "\n"
+				}
+				if p.Version() == 3 {
+					message = p.lineMessage(line)
 				}
 				anchorOID := events[anchor.Key.ID()]
 				if anchorOID == "" {
@@ -326,8 +333,12 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		if e != nil {
 			return Generation{}, e
 		}
-		oid := g.Objects.Synthetic(tree, nil, "cvsgitrelay-tag-v2\nname="+Hex(name)+"\nselection-sha256="+Hash("cvsgitrelay-tag-selection-v2", b)+"\n")
-		ref, e := EncodedRef("refs/tags/cvs/", name)
+		message := "cvsgitrelay-tag-v2\nname=" + Hex(name) + "\nselection-sha256=" + Hash("cvsgitrelay-tag-selection-v2", b) + "\n"
+		if p.Version() == 3 {
+			message = p.tagMessage(name)
+		}
+		oid := g.Objects.Synthetic(tree, nil, message)
+		ref, e := p.TagRef(name)
 		if e != nil {
 			return Generation{}, e
 		}
