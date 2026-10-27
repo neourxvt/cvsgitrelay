@@ -301,11 +301,7 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 	// Keep slow remote enumeration and content reads visible independently of
 	// subprocess completion. Progress never enters canonical source records.
 	connections := sourceConnections(r.Config.CVSRoot, opts.Connections)
-	if r.Runner.Log != nil {
-		progress := newMirrorProgress(ctx, r.Runner.Log, opts.ProgressInterval)
-		progress.stage("Verifying complete CVS source", "verification_policy", r.Config.Policy.Verify, "connections", connections, "scans", scans)
-		defer progress.close()
-	}
+	r.phases.begin("read_source", "Verifying complete CVS source", "verification_policy", r.Config.Policy.Verify, "connections", connections, "scans", scans)
 	var previous map[string][]byte
 	reader := func(ctx context.Context) (canonical.Inventory, sourceStats, error) {
 		return r.readSharedSourceScope(ctx, connections, previous)

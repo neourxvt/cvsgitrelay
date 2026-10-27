@@ -76,10 +76,16 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if err := r.loadCurrent(ctx); err != nil {
 		return Summary{}, err
 	}
+	r.phases = newPhaseTimer(ctx, r.Runner.Log, opts.ProgressInterval, "Sync progress")
+	defer func() {
+		r.phases.finish("Sync phase durations")
+		r.phases = nil
+	}()
 	in, stats, err := r.acceptSource(ctx, &opts)
 	if err != nil {
 		return Summary{}, err
 	}
+	r.phases.begin("build_history", "Building Git history", "revisions", len(in.Records))
 	g, err := canonical.Build(in, r.Config.Policy)
 	if err != nil {
 		return Summary{}, diag.New("source", "canonical.build", "source cannot form an unambiguous canonical graph", err)
@@ -89,12 +95,16 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if err := r.publishGeneration(ctx, g, &opts); err != nil {
 		return Summary{}, err
 	}
+	if r.Config.Policy.Verify == "trust-append-only" {
+		r.phases.begin("save_cache", "Saving content cache", "revisions", len(in.Records))
+	}
 	if err := r.cacheAccepted(in); err != nil && r.Runner.Log != nil {
 		r.Runner.Log.Warn("Content cache could not be saved; the next run will re-read source bytes")
 	}
 	// Automatic GC stays disabled, so pack the new loose objects here. The
 	// generation is already published; a failed repack only leaves them loose.
 	if r.objectWrites > 0 {
+		r.phases.begin("pack_objects", "Packing Git objects", "loose_objects", r.objectWrites)
 		if err := r.packObjects(ctx); err != nil && r.Runner.Log != nil {
 			r.Runner.Log.Warn("New objects could not be packed; they remain loose until the next repack", "code", diag.Code(err))
 		}
@@ -150,10 +160,16 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 	if err := r.loadCurrent(ctx); err != nil {
 		return Summary{}, err
 	}
+	r.phases = newPhaseTimer(ctx, r.Runner.Log, opts.ProgressInterval, "Verify progress")
+	defer func() {
+		r.phases.finish("Verify phase durations")
+		r.phases = nil
+	}()
 	in, stats, err := r.acceptSource(ctx, &opts)
 	if err != nil {
 		return Summary{}, err
 	}
+	r.phases.begin("build_history", "Building Git history", "revisions", len(in.Records))
 	g, err := canonical.Build(in, r.Config.Policy)
 	if err != nil {
 		return Summary{}, err
@@ -166,6 +182,7 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 	}
 	// Validate every expected raw object without rewriting objects or refs.
 	// Rehashing the stored bytes detects corruption independently of Git.
+	r.phases.begin("check_objects", "Checking stored Git objects", "objects", len(g.Objects))
 	err = r.readObjects(ctx, canonical.SortedKeys(g.Objects), func(oid, kind string, data []byte) error {
 		if kind != g.Objects[oid].Kind || canonical.OID(kind, data) != oid {
 			return diag.New("integrity", "verify.objects", "canonical object is corrupt", nil)

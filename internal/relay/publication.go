@@ -354,6 +354,7 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 			return fail(fmt.Errorf("unreachable projection"))
 		}
 	}
+	r.phases.begin("fsck", "Running git fsck on the generation")
 	if _, err := r.git(ctx, nil, nil, "fsck", "--strict", "--no-dangling", oid); err != nil {
 		return fail(err)
 	}
@@ -612,15 +613,18 @@ func (r *Repository) publishGeneration(ctx context.Context, g canonical.Generati
 	if g.State == r.StateOID {
 		return nil
 	}
+	r.phases.begin("write_objects", "Writing Git objects", "objects", len(g.Objects))
 	if _, err := r.storeObjects(ctx, g.Objects, opts); err != nil {
 		return err
 	}
+	r.phases.begin("check_history", "Checking new Git history", "revisions", len(g.Manifest.Revisions))
 	if _, err := r.readState(ctx, g.State); err != nil {
 		return err
 	}
 	if err := opts.hit("objects-written"); err != nil {
 		return err
 	}
+	r.phases.begin("publish_refs", "Publishing refs", "refs", len(g.Manifest.Refs))
 	i := publicationIntent{Version: 2, Phase: "prepared", Old: r.StateOID, New: g.State, Expected: maps.Clone(r.Manifest.Refs), Desired: maps.Clone(g.Manifest.Refs)}
 	o, journal, err := journalObjects(i)
 	if err != nil {

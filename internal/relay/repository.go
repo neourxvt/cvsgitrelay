@@ -50,6 +50,8 @@ type Repository struct {
 	metadataRequests int
 	metadataBytes    int64
 	lock             *os.File
+	// phases times the steps of the running sync or verify; nil otherwise.
+	phases *phaseTimer
 }
 
 func (r *Repository) submodulePolicy() string {

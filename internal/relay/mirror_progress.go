@@ -13,6 +13,7 @@ import (
 type mirrorProgress struct {
 	mu      sync.Mutex
 	log     *slog.Logger
+	title   string
 	phase   string
 	started time.Time
 	fields  map[string]any
@@ -21,7 +22,12 @@ type mirrorProgress struct {
 }
 
 func newMirrorProgress(ctx context.Context, log *slog.Logger, interval time.Duration) *mirrorProgress {
-	p := &mirrorProgress{log: log, fields: map[string]any{}, stop: make(chan struct{}), done: make(chan struct{})}
+	return newProgress(ctx, log, interval, "Mirror progress")
+}
+
+// newProgress reports the current phase every interval under the given title.
+func newProgress(ctx context.Context, log *slog.Logger, interval time.Duration, title string) *mirrorProgress {
+	p := &mirrorProgress{log: log, title: title, fields: map[string]any{}, stop: make(chan struct{}), done: make(chan struct{})}
 	if interval <= 0 {
 		close(p.done)
 		return p
@@ -87,5 +93,5 @@ func (p *mirrorProgress) report() {
 	for _, key := range keys {
 		fields = append(fields, key, p.fields[key])
 	}
-	p.log.Info("Mirror progress", fields...)
+	p.log.Info(p.title, fields...)
 }
