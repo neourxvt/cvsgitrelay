@@ -194,7 +194,7 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 	}
 	defer lock.Close()
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return summary, diag.New("locked", "mirror.lock", "another process is updating this CVS mirror", err)
+		return summary, diag.New("locked", "mirror.lock", "another process is updating or syncing from this CVS mirror", err)
 	}
 	defer func() {
 		if err != nil {

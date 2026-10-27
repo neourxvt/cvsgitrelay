@@ -37,7 +37,10 @@ source records, symbols and policy produce equal reachable object bytes and the
 same state OID regardless of polling boundaries or discovery order. Newly visible
 older revisions, branch membership changes, moved tags and deleted symbols may
 rewrite project history. A matching second scan is a stability check, not proof
-of a repository-wide atomic source snapshot.
+of a repository-wide atomic source snapshot. A local CVSROOT created by `mirror`
+is scanned only once: sync and verify hold a shared lock on the mirror for the
+whole read, `mirror` cannot update it meanwhile, and a sync started while
+`mirror` runs fails with a lock error.
 
 One designated event commit preserves each CVS revision, including dead and
 unchanged-tree revisions. Trees use exact binary content and mode 100644. Named,

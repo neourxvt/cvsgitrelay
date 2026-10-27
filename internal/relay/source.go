@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 
 	"cvsgitrelay/internal/canonical"
 	"cvsgitrelay/internal/diag"
@@ -249,19 +251,59 @@ func sourceConnections(root string, configured int) int {
 	return configured
 }
 
+// stableMirrorSource takes a shared lock on the writer lock of a local
+// cvsgitrelay mirror. mirror holds that lock exclusively for its whole run and
+// is the only writer of a mirror, so while the shared lock is held the archives
+// cannot change. ok is false for every other source, including mirrors without
+// a readable lock file; those keep the confirming second scan.
+func stableMirrorSource(root string) (release func(), ok bool, err error) {
+	if !localCVSRoot(root) {
+		return nil, false, nil
+	}
+	dir, err := sourceDirectory(root)
+	if err != nil {
+		return nil, false, err
+	}
+	lock, err := os.Open(filepath.Join(dir, mirrorStateDir, "lock"))
+	if err != nil {
+		return nil, false, nil
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, false, diag.New("locked", "source.mirror", "the local CVS mirror is being updated; retry after mirror finishes", err)
+		}
+		return nil, false, nil
+	}
+	return func() { lock.Close() }, true, nil
+}
+
 // Inventory acceptance compares two complete scans, including normalized bytes.
 // This detects observed instability, without claiming an atomic CVS snapshot.
+// A locked local cvsgitrelay mirror cannot change during the read, so one
+// complete scan is accepted without the confirming second one.
 func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical.Inventory, sourceStats, error) {
 	var stats sourceStats
 	if err := opts.hit("scan-start"); err != nil {
 		return canonical.Inventory{}, stats, err
+	}
+	release, stable, err := stableMirrorSource(r.Config.CVSRoot)
+	if err != nil {
+		return canonical.Inventory{}, stats, err
+	}
+	if stable {
+		defer release()
+	}
+	scans := 2
+	if stable {
+		scans = 1
 	}
 	// Keep slow remote enumeration and content reads visible independently of
 	// subprocess completion. Progress never enters canonical source records.
 	connections := sourceConnections(r.Config.CVSRoot, opts.Connections)
 	if r.Runner.Log != nil {
 		progress := newMirrorProgress(ctx, r.Runner.Log, opts.ProgressInterval)
-		progress.stage("Verifying complete CVS source", "verification_policy", r.Config.Policy.Verify, "connections", connections)
+		progress.stage("Verifying complete CVS source", "verification_policy", r.Config.Policy.Verify, "connections", connections, "scans", scans)
 		defer progress.close()
 	}
 	var previous map[string][]byte
@@ -286,30 +328,32 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 	if err := r.verifyAccepted(first); err != nil {
 		return first, stats, err
 	}
-	previous = map[string][]byte{}
-	for _, record := range first.Records {
-		if record.Present {
-			previous[record.Key.ID()] = record.Content
-		}
-	}
 	if err := opts.hit("fetch-complete"); err != nil {
 		return first, stats, err
 	}
-	second, b, err := reader(ctx)
-	stats.Bytes += b.Bytes
-	stats.Requests += b.Requests
-	if err != nil {
-		return first, stats, err
-	}
-	previous = nil
-	if r.sourceReader != nil {
-		r.reuseTrusted(&second)
-	}
-	if err := r.verifyAccepted(second); err != nil {
-		return first, stats, err
-	}
-	if first.Digest(r.Config.SourceID) != second.Digest(r.Config.SourceID) {
-		return first, stats, diag.New("source", "source.accept", "source changed between complete scans; retry when stable", nil)
+	if !stable {
+		previous = map[string][]byte{}
+		for _, record := range first.Records {
+			if record.Present {
+				previous[record.Key.ID()] = record.Content
+			}
+		}
+		second, b, err := reader(ctx)
+		stats.Bytes += b.Bytes
+		stats.Requests += b.Requests
+		if err != nil {
+			return first, stats, err
+		}
+		previous = nil
+		if r.sourceReader != nil {
+			r.reuseTrusted(&second)
+		}
+		if err := r.verifyAccepted(second); err != nil {
+			return first, stats, err
+		}
+		if first.Digest(r.Config.SourceID) != second.Digest(r.Config.SourceID) {
+			return first, stats, diag.New("source", "source.accept", "source changed between complete scans; retry when stable", nil)
+		}
 	}
 	stats.Requests += r.metadataRequests - metadataRequests
 	stats.Bytes += r.metadataBytes - metadataBytes
@@ -317,7 +361,7 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 		return first, stats, err
 	}
 	if r.Runner.Log != nil {
-		r.Runner.Log.Info("Source verified", "verification_policy", r.Config.Policy.Verify, "revisions", len(first.Records), "source_requests", stats.Requests, "source_bytes", stats.Bytes)
+		r.Runner.Log.Info("Source verified", "verification_policy", r.Config.Policy.Verify, "scans", scans, "revisions", len(first.Records), "source_requests", stats.Requests, "source_bytes", stats.Bytes)
 	}
 	return first, stats, nil
 }

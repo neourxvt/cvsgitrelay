@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
+	"cvsgitrelay/internal/canonical"
 	"cvsgitrelay/internal/diag"
 )
 
@@ -143,5 +145,62 @@ func TestSourceConnections(t *testing.T) {
 		if got := sourceConnections(root, 1); got != 1 {
 			t.Fatalf("%s: %d connections", root, got)
 		}
+	}
+}
+
+// A locked local cvsgitrelay mirror is read once, blocks a concurrent mirror
+// update while it is read, and is refused while mirror holds its lock. Every
+// other source keeps the confirming second scan.
+func TestAcceptSourceScansOfLocalMirrors(t *testing.T) {
+	plain := t.TempDir()
+	mirror := t.TempDir()
+	lockPath := filepath.Join(mirror, mirrorStateDir, "lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// tryMirrorLock reports whether mirror could take its exclusive lock now.
+	tryMirrorLock := func() bool {
+		f, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+	}
+	accept := func(root string) (int, error) {
+		calls := 0
+		r := &Repository{Config: Config{CVSRoot: root, SourceID: "source"}, Runner: testRunner()}
+		r.sourceReader = func(context.Context) (canonical.Inventory, sourceStats, error) {
+			calls++
+			if root == mirror && tryMirrorLock() {
+				t.Fatal("mirror could update the source during the scan")
+			}
+			return canonical.Inventory{}, sourceStats{}, nil
+		}
+		_, _, err := r.acceptSource(context.Background(), &Options{})
+		return calls, err
+	}
+	for root, want := range map[string]int{plain: 2, ":local:" + plain: 2, mirror: 1, ":fork:" + mirror: 1, ":pserver:anonymous@cvs.example.org:" + mirror: 2} {
+		calls, err := accept(root)
+		if err != nil || calls != want {
+			t.Fatalf("%s: %d scans, %v", root, calls, err)
+		}
+	}
+	if !tryMirrorLock() {
+		t.Fatal("the scan did not release the mirror lock")
+	}
+	held, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if calls, err := accept(mirror); diag.Code(err) != "locked" || calls != 0 {
+		t.Fatalf("scanned a mirror during its update: %d scans, %v", calls, err)
 	}
 }
