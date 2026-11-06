@@ -348,7 +348,7 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 			return first, stats, err
 		}
 		if first.Digest(r.Config.SourceID) != second.Digest(r.Config.SourceID) {
-			return first, stats, diag.New("source", "source.accept", "source changed between complete scans; retry when stable", nil)
+			return first, stats, diag.New("retry", "source.accept", "source changed between complete scans; retry when stable", nil)
 		}
 	}
 	stats.Requests += r.metadataRequests - metadataRequests

@@ -125,7 +125,7 @@ func TestRlogFramingImitationRejected(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	r := &Repository{Config: Config{CVSRoot: "/cvs", Module: "module"}, Runner: testRunner()}
-	if err := r.verifyRlogArchives(context.Background(), "module", archives); diag.Code(err) != "source" {
+	if err := r.verifyRlogArchives(context.Background(), "module", archives); diag.Code(err) != "retry" {
 		t.Fatalf("imitated file block was accepted: %v", err)
 	}
 	if err := r.verifyRlogArchives(context.Background(), "module", archives[:1]); err != nil {

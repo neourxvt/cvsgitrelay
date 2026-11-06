@@ -319,7 +319,7 @@ func Mirror(ctx context.Context, runner *process.Runner, root, module, output st
 		return summary, err
 	}
 	if !reflect.DeepEqual(before, after) {
-		return summary, diag.New("source", "mirror.compare", "CVS history changed during mirroring; rerun to reuse completed downloads", nil)
+		return summary, diag.New("retry", "mirror.compare", "CVS history changed during mirroring; rerun to reuse completed downloads", nil)
 	}
 	local := &Repository{Config: Config{CVSRoot: staging, Module: module}, Runner: runner, Submodules: "include", mirroring: true}
 	m.progress.stage("Checking generated CVS history", "module", module)

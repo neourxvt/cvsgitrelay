@@ -42,6 +42,27 @@ does not claim tested power-loss durability. Administrators needing it should
 configure Git's `core.fsync=committed` policy and validate their storage stack.
 Configuration is synced when initialized; no separate mutable cursor is used.
 
+## Scheduled runs
+
+A sync that fails publishes nothing, so a scheduler such as a systemd timer or
+cron job can simply run it again. The exit status tells it whether that is
+enough:
+
+| Exit | Meaning | Action |
+| ---- | ------- | ------ |
+| 0 | Synced, or nothing new | None |
+| 75 | Temporary: CVS stayed unreachable through the built-in retries, the source changed while it was read, another run or `mirror` holds the lock, or a command reached `process.command_timeout` | Retry on the next run; alert only if it persists for several runs |
+| 5 | The source cannot be imported as it is, such as `SOURCE_MUTATED` or `SOURCE_MISSING` after a CVS admin edit, or history that cannot form a canonical graph | Investigate; it repeats until the source or the configuration changes |
+| 6 | Refs of the destination were changed outside the relay | Investigate; restore the refs from a backup |
+| 2, 3 | Invalid command line or configuration | Fix the invocation or configuration |
+| 4 | Unsupported source layout or destination repository | Investigate |
+| 7 | A command failed or exceeded `process.max_output` | Inspect the logged stderr |
+| 74, 70 | Local I/O failure or internal error | Investigate |
+| 130 | Interrupted by a signal | None |
+
+A persisting 75 can still need attention, for example a server that is down
+for good or a timeout too short for the source; the logged failure names it.
+
 Explicit developer interruption points are available through
 `--failpoint [kill:]STAGE[:ORDINAL]`. Stages are `scan-start`, `scan-complete`,
 `fetch-start`, `fetch-complete`, `blob-written`, `tree-written`, `commit-written`,

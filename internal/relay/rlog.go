@@ -340,6 +340,8 @@ func parseError(line int, message string) error {
 // rlog prints log messages verbatim, so a message can imitate the framing of a
 // complete additional file block. The name-only listing contains no message
 // text; requiring exactly the same archives makes such an imitation fail.
+// A file added or removed between the two listings fails the same way, so the
+// mismatch counts as worth retrying: an imitation fails again on every run.
 func (r *Repository) verifyRlogArchives(ctx context.Context, target string, parsed []string) error {
 	out, err := r.cvs(ctx, "", "rlog", "-R", target)
 	r.metadataRequests++
@@ -355,7 +357,7 @@ func (r *Repository) verifyRlogArchives(ctx context.Context, target string, pars
 	slices.Sort(listed)
 	slices.Sort(parsed)
 	if !slices.Equal(listed, parsed) {
-		return diag.New("source", "cvs.scan", "rlog file blocks disagree with the archive name listing; a log message may imitate rlog framing", nil,
+		return diag.New("retry", "cvs.scan", "rlog file blocks disagree with the archive name listing; the source changed during the scan or a log message imitates rlog framing", nil,
 			"module_hex", hexBytes(target), "listed", len(listed), "parsed", len(parsed))
 	}
 	return nil

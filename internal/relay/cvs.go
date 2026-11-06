@@ -17,15 +17,19 @@ func (r *Repository) cvs(ctx context.Context, dir string, args ...string) ([]byt
 	}
 	// CVS reads can be repeated after transport failures. Each attempt has
 	// fresh output buffers, so partial responses never enter the durable cache.
-	retryDelays := [...]time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}
 	for attempt := 0; ; attempt++ {
 		out, err := run(ctx, dir, nil, nil, "cvs", append(prefix, args...)...)
-		if err == nil || attempt == len(retryDelays) || ctx.Err() != nil || !transientCVSConnection(err) {
+		if err == nil || ctx.Err() != nil || !transientCVSConnection(err) {
 			return out, err
 		}
-		delay := retryDelays[attempt]
+		if attempt == len(cvsRetryDelays) {
+			// The server stayed unreachable for every retry. Nothing about the
+			// source is wrong, so the run is marked as worth repeating later.
+			return out, diag.New("retry", "cvs.connect", "CVS server stayed unreachable; retry later", err, "attempts", attempt+1)
+		}
+		delay := cvsRetryDelays[attempt]
 		if r.Runner.Log != nil {
-			r.Runner.Log.Warn("CVS connection failed; retrying read", "retry", attempt+1, "max_retries", len(retryDelays), "delay", delay)
+			r.Runner.Log.Warn("CVS connection failed; retrying read", "retry", attempt+1, "max_retries", len(cvsRetryDelays), "delay", delay)
 		}
 		timer := time.NewTimer(delay)
 		select {
@@ -36,6 +40,10 @@ func (r *Repository) cvs(ctx context.Context, dir string, args ...string) ([]byt
 		}
 	}
 }
+
+// cvsRetryDelays are the pauses before each repeated CVS read after a
+// transport failure. Tests shorten them.
+var cvsRetryDelays = []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}
 
 // Only failed subprocesses with recognizable transport diagnostics qualify.
 // Warnings after exit zero, output limits and source errors remain fatal.
@@ -57,6 +65,9 @@ func transientCVSConnection(err error) bool {
 		"broken pipe",
 		"end of file from server",
 		"connection closed by remote host",
+		"no route to host",
+		"network is unreachable",
+		"temporary failure in name resolution",
 	} {
 		if strings.Contains(stderr, diagnostic) {
 			return true
@@ -103,7 +114,7 @@ func (r *Repository) scan(ctx context.Context) (*Inventory, error) {
 		return nil, err
 	}
 	if !sameMappings(layout, after) {
-		return nil, diag.New("source", "modules.compare", "module definitions changed during discovery; retry when source is stable", nil, "before", layout, "after", after)
+		return nil, diag.New("retry", "modules.compare", "module definitions changed during discovery; retry when source is stable", nil, "before", layout, "after", after)
 	}
 	in.Layout = selected
 	in.Submodules = policy

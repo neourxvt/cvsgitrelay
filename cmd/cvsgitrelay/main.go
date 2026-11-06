@@ -271,8 +271,14 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	return 0
 }
 
+// exitCode maps a failure to the process exit status. 75 (EX_TEMPFAIL) is
+// reserved for failures that a later run can resolve without intervention: an
+// unstable or unreachable source, a held lock, or a command deadline. A
+// scheduler can retry those quietly and alert on every other nonzero status.
 func exitCode(code string) int {
 	switch code {
+	case "retry", "locked", "timeout":
+		return 75
 	case "usage":
 		return 2
 	case "config":
@@ -281,9 +287,9 @@ func exitCode(code string) int {
 		return 4
 	case "parse", "source", "integrity":
 		return 5
-	case "conflict", "locked":
+	case "conflict":
 		return 6
-	case "subprocess", "timeout", "limit":
+	case "subprocess", "limit":
 		return 7
 	case "io":
 		return 74
