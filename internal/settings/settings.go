@@ -63,6 +63,10 @@ type Maintenance struct {
 	// IntervalDays is the least number of days between two GC runs; 0
 	// disables them.
 	IntervalDays int `toml:"interval_days"`
+	// VerifyDays is the least number of days between two syncs that read
+	// every revision from the source instead of the trust-append-only
+	// content cache; 0 disables them.
+	VerifyDays int `toml:"verify_days"`
 }
 
 type Debug struct {
@@ -184,6 +188,9 @@ func (c Config) Validate() error {
 	}
 	if c.Maintenance.IntervalDays < 0 {
 		return invalid("maintenance.interval_days", "use a number of days, or 0 to disable maintenance")
+	}
+	if c.Maintenance.VerifyDays < 0 {
+		return invalid("maintenance.verify_days", "use a number of days, or 0 to disable content checks")
 	}
 	for name, identity := range c.Authors {
 		if name == "" || len(name) > canonical.MaxAuthor {

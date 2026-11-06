@@ -24,6 +24,10 @@ type Options struct {
 	// MaintenanceInterval makes sync run Git GC once this much time has
 	// passed since the last one; zero disables it.
 	MaintenanceInterval time.Duration
+	// ContentCheckInterval makes a trust-append-only sync read every revision
+	// from the source, ignoring the content cache, once this much time has
+	// passed since it last did; zero disables it.
+	ContentCheckInterval time.Duration
 	// AcceptHistoryChanges makes sync publish a source whose previously
 	// accepted revisions changed or disappeared, keeping the replaced
 	// generation under a superseded ref, instead of failing.
@@ -51,6 +55,9 @@ type Summary struct {
 	HistoryChanged int    `json:"history_changed,omitempty"`
 	HistoryRemoved int    `json:"history_removed,omitempty"`
 	Superseded     string `json:"superseded,omitempty"`
+	// ContentChecked is set when sync read every revision from the source
+	// instead of the trust-append-only content cache.
+	ContentChecked bool `json:"content_checked,omitempty"`
 	// Maintenance is "completed" or "failed" when sync ran Git GC.
 	Maintenance   string `json:"maintenance,omitempty"`
 	ElapsedMillis int64  `json:"elapsed_ms"`
@@ -96,7 +103,12 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 		r.phases.finish("Sync phase durations")
 		r.phases = nil
 	}()
+	// A scheduled content check reads what the cache would otherwise supply,
+	// so a byte-only edit of old revisions surfaces as a changed record.
 	now := time.Now().UTC()
+	r.rereadContent = opts.ContentCheckInterval > 0 && r.Config.Policy.Verify == "trust-append-only" &&
+		r.readMaintenance().contentCheckDue(now, opts.ContentCheckInterval)
+	defer func() { r.rereadContent = false }()
 	in, stats, err := r.acceptSource(ctx, &opts)
 	if err != nil {
 		return Summary{}, err
@@ -136,6 +148,10 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if len(r.changes) > 0 && r.Runner.Log != nil {
 		r.Runner.Log.Warn("Accepted changed CVS history and rewrote the affected branches; the previous history is kept under "+s.Superseded,
 			"changed", s.HistoryChanged, "removed", s.HistoryRemoved, "revisions", changeList(r.changes, 20))
+	}
+	if r.rereadContent {
+		r.recordContentCheck(now)
+		s.ContentChecked = true
 	}
 	if r.Config.Policy.Verify == "trust-append-only" {
 		r.phases.begin("save_cache", "Saving content cache", "revisions", len(in.Records))

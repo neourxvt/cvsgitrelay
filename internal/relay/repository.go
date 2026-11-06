@@ -55,6 +55,9 @@ type Repository struct {
 	// changes lists the accepted revisions that the last accepted source
 	// scan changed or removed.
 	changes []historyChange
+	// rereadContent makes a trust-append-only sync read every revision from
+	// the source instead of the content cache.
+	rereadContent bool
 }
 
 func (r *Repository) submodulePolicy() string {

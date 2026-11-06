@@ -131,3 +131,38 @@ func TestMostlyMissingHistoryIsRefused(t *testing.T) {
 		t.Fatal("refused change published something")
 	}
 }
+
+// A trust-append-only destination misses byte-only edits of old revisions
+// until a scheduled content check reads every revision again.
+func TestScheduledContentCheckFindsEditedContent(t *testing.T) {
+	root, _, _ := fixture(t)
+	ctx := context.Background()
+	r := openFixture(t, root, "trust-append-only")
+	month := 30 * 24 * time.Hour
+	options := Options{AcceptHistoryChanges: true, ContentCheckInterval: month}
+	if s, err := r.Sync(ctx, options); err != nil || !s.ContentChecked {
+		t.Fatalf("first sync: %+v, %v", s, err)
+	}
+	trusted := r.StateOID
+	editArchive(t, filepath.Join(root, "module", "binary file,v"), "$Id$", "$XX$")
+	if s, err := r.Sync(ctx, options); err != nil || s.ContentChecked || r.StateOID != trusted {
+		t.Fatalf("content check repeated within its interval: %+v, %v", s, err)
+	}
+
+	state := r.readMaintenance()
+	state.LastContentCheck = state.LastContentCheck.Add(-month)
+	if err := r.writeMaintenance(state); err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Sync(ctx, options)
+	if err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	if !s.ContentChecked || s.HistoryChanged == 0 || r.StateOID == trusted {
+		t.Fatalf("content check missed the edit: %+v", s)
+	}
+	// The cache now holds the accepted contents again.
+	if s, err := r.Sync(ctx, options); err != nil || s.ContentChecked || s.HistoryChanged != 0 || s.ObjectWrites != 0 {
+		t.Fatalf("sync after the content check: %+v, %v", s, err)
+	}
+}

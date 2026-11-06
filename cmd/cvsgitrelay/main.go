@@ -254,7 +254,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 				switch operation {
 				case "sync":
 					summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint,
-						MaintenanceInterval:  time.Duration(cfg.Maintenance.IntervalDays) * 24 * time.Hour,
+						MaintenanceInterval: time.Duration(cfg.Maintenance.IntervalDays) * 24 * time.Hour, ContentCheckInterval: time.Duration(cfg.Maintenance.VerifyDays) * 24 * time.Hour,
 						AcceptHistoryChanges: cfg.Sync.AcceptHistoryChanges})
 				case "status":
 					summary, err = repository.Status(ctx, cfg.Sync.Scope)

@@ -120,7 +120,8 @@ contents. Dead revisions retain their immutable metadata and deletion event;
 the CVS reader consistently represents their unavailable content as absent.
 `"trust-append-only"` explicitly permits reuse of previously fingerprinted content
 from a nonauthoritative local cache. It can miss old-content edits with unchanged
-metadata. Damaged or missing caches fall back to source reads. Metadata is always
+metadata, unless `maintenance.verify_days` schedules a sync that reads every
+revision again. Damaged or missing caches fall back to source reads. Metadata is always
 re-enumerated over the full scope; valid old cached content can skip a checkout.
 Every report and manifest identifies the verification policy. `status` reads
 only module definitions and `rlog` metadata: it reports discovered, imported

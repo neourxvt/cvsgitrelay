@@ -79,7 +79,8 @@ accept_history_changes = true
 # Fixed canonical source verification policy, applied on every sync/status/verify:
 # "full" (default): re-read and compare all accepted records and content.
 # "trust-append-only": may reuse fingerprinted historical content, allowing
-# silent old-content mutations with unchanged metadata to escape detection.
+# silent old-content mutations with unchanged metadata to escape detection
+# between the content checks scheduled by maintenance.verify_days.
 # A change requires a fresh destination. CLI override: --mode
 mode = "full"
 
@@ -124,6 +125,14 @@ max_output = 268435456
 # failing the sync, and is retried by a sync one day later.
 # 0 (default) disables it; maintenance is then an external operation.
 interval_days = 0
+
+# With verify.mode = "trust-append-only", make a sync read every revision from
+# the source instead of the content cache once this many days have passed
+# since the last such sync, for example 30. Such a sync finds contents changed
+# directly in the RCS archives and handles them like any other changed history
+# (see sync.accept_history_changes); it costs as much as a sync in full mode.
+# 0 (default) disables it. Full mode reads every revision on every sync anyway.
+verify_days = 0
 
 [debug]
 # Deliberate interruption for developer recovery checks. Empty disables it.

@@ -77,6 +77,12 @@ source returns to its earlier state, sync publishes exactly the earlier
 generation again. Set `sync.accept_history_changes = false` to fail on every
 such change instead.
 
+With `verify.mode = "trust-append-only"`, a sync reads only new revisions, so
+contents changed directly in the RCS archives go unnoticed. Set
+`maintenance.verify_days`, for example to 30, and a sync reads every revision
+again whenever that many days have passed since the last such sync. It reports
+`"content_checked": true` and handles changed contents like the changes above.
+
 Each sync that writes objects adds one small pack, and a rewritten generation
 leaves its old objects unreachable. Automatic Git GC is disabled because it
 would run outside the writer lock. Set `maintenance.interval_days`, for example

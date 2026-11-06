@@ -237,7 +237,7 @@ func (r *Repository) reuseTrusted(in *canonical.Inventory) {
 // A cached record must authenticate against canonical state before its content
 // can replace a remote read. Freshly scanned immutable metadata is retained.
 func (r *Repository) reuseTrustedContent(current *canonical.Record) bool {
-	if r.Config.Policy.Verify != "trust-append-only" {
+	if r.Config.Policy.Verify != "trust-append-only" || r.rereadContent {
 		return false
 	}
 	old, ok := r.Manifest.Revisions[current.Key.ID()]

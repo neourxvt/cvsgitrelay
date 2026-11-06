@@ -36,17 +36,37 @@ const maintenancePrune = "2.weeks.ago"
 type maintenanceState struct {
 	LastSuccess time.Time `json:"last_success,omitzero"`
 	LastFailure time.Time `json:"last_failure,omitzero"`
+	// LastContentCheck is the last sync that read every revision from the
+	// source instead of the trust-append-only content cache.
+	LastContentCheck time.Time `json:"last_content_check,omitzero"`
+}
+
+// passed reports whether at least d has passed since t. Never is long ago, and
+// so are times after now, left by a clock that was set wrong, so a corrected
+// clock cannot postpone a scheduled task indefinitely.
+func passed(t, now time.Time, d time.Duration) bool {
+	return t.IsZero() || t.After(now) || now.Sub(t) >= d
 }
 
 // due reports whether GC should run now: the last success is at least interval
-// old and no failure happened within maintenanceRetry. Times after now, left
-// by a clock that was set wrong, count as long past, so a corrected clock
-// cannot postpone GC indefinitely.
+// old and no failure happened within maintenanceRetry.
 func (m maintenanceState) due(now time.Time, interval time.Duration) bool {
-	passed := func(t time.Time, d time.Duration) bool {
-		return t.IsZero() || t.After(now) || now.Sub(t) >= d
+	return passed(m.LastSuccess, now, interval) && passed(m.LastFailure, now, maintenanceRetry)
+}
+
+// contentCheckDue reports whether the next sync should read all contents.
+func (m maintenanceState) contentCheckDue(now time.Time, interval time.Duration) bool {
+	return passed(m.LastContentCheck, now, interval)
+}
+
+// recordContentCheck notes a successful sync that read every revision. A lost
+// record only repeats the check on the next sync.
+func (r *Repository) recordContentCheck(now time.Time) {
+	state := r.readMaintenance()
+	state.LastContentCheck = now
+	if err := r.writeMaintenance(state); err != nil && r.Runner.Log != nil {
+		r.Runner.Log.Warn("Maintenance record could not be saved; the next sync checks contents again", "error", err.Error())
 	}
-	return passed(m.LastSuccess, interval) && passed(m.LastFailure, maintenanceRetry)
 }
 
 // readMaintenance returns the recorded state. A missing or unreadable record
