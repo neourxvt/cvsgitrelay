@@ -173,11 +173,19 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		}
 	}
 	remaining := SortedKeys(projects)
+	// lineParents records the primary parent line of every built line, which
+	// ranks the candidates of the lines that branch from it.
+	lineParents := map[string]string{}
 	for len(remaining) > 0 {
 		progress := false
 		for i, id := range remaining {
 			line := projects[id]
-			parentLine := ""
+			// The files of one branch can fork from different lines: CVS
+			// branches each file from whatever its working copy holds, such as
+			// the vendor revision of a file never changed on trunk, or the
+			// trunk revision of a file never changed on the parent branch.
+			// Every such line must be built before this line's seed.
+			candidates := map[string]int{}
 			ready := true
 			for _, f := range line.members {
 				if f.fork == nil {
@@ -187,10 +195,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				if parent == "" || parent == id {
 					return Generation{}, fmt.Errorf("unresolved parent line")
 				}
-				if parentLine != "" && parentLine != parent {
-					return Generation{}, fmt.Errorf("conflicting parent lines")
-				}
-				parentLine = parent
+				candidates[parent]++
 				if g.Manifest.Lines[parent] == "" {
 					ready = false
 				}
@@ -198,6 +203,8 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			if !ready {
 				continue
 			}
+			parentLine := primaryParentLine(candidates, projects, lineParents)
+			lineParents[id] = parentLine
 			files := newLineTree(g.Objects)
 			var parent string
 			if id == "trunk" {
@@ -214,7 +221,10 @@ func Build(input Inventory, p Policy) (Generation, error) {
 						return Generation{}, fmt.Errorf("unsupported parentless seed")
 					}
 					r := f.fork
-					if anchor == nil || eventCompare(*r, *anchor) < 0 {
+					// The seed descends from the primary parent line only. Forks
+					// on other lines still contribute their contents to the tree.
+					inPrimary := assignment[fileLineID(f.archive, Line(r.Key.Number))] == parentLine
+					if inPrimary && (anchor == nil || eventCompare(*r, *anchor) < 0) {
 						anchor = r
 					}
 					if r.State == "live" {
@@ -385,6 +395,63 @@ func Build(input Inventory, p Policy) (Generation, error) {
 	}
 	g.Objects = reachable
 	return g, nil
+}
+
+// primaryParentLine picks the line a branch seed descends from when its files
+// fork from several lines. The deepest line by ordinary branches wins, so a
+// branch of a branch descends from that branch even where some files still
+// fork from the trunk. Vendor lines add no depth and lose ties, because CVS's
+// HEAD follows a vendor branch where trunk never changed: a branch taken from
+// the trunk descends from the trunk even if most files fork from the vendor
+// line. Member counts and then line IDs break remaining ties deterministically.
+func primaryParentLine(candidates map[string]int, projects map[string]*projectLine, lineParents map[string]string) string {
+	depth := func(id string) int {
+		d := 0
+		for ; id != "trunk" && id != ""; id = lineParents[id] {
+			if !vendorLine(projects[id]) {
+				d++
+			}
+		}
+		return d
+	}
+	best := ""
+	for _, id := range SortedKeys(candidates) {
+		if best == "" {
+			best = id
+			continue
+		}
+		if c := cmp.Or(
+			cmp.Compare(depth(id), depth(best)),
+			-cmp.Compare(boolRank(vendorLine(projects[id])), boolRank(vendorLine(projects[best]))),
+			cmp.Compare(candidates[id], candidates[best]),
+		); c > 0 {
+			best = id
+		}
+	}
+	return best
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// vendorLine reports whether every file line of a branch has an odd branch
+// number, as CVS gives vendor branches created by import (1.1.1 by default),
+// while ordinary branches made by tag -b always get even numbers.
+func vendorLine(line *projectLine) bool {
+	if line.id == "trunk" || len(line.members) == 0 {
+		return false
+	}
+	for _, f := range line.members {
+		last := f.number[strings.LastIndexByte(f.number, '.')+1:]
+		if (last[len(last)-1]-'0')%2 == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // tagCommitV3 attaches a format 3 tag snapshot to the history it was taken

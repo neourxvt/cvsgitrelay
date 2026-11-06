@@ -46,7 +46,11 @@ One designated event commit preserves each CVS revision, including dead and
 unchanged-tree revisions. Trees use exact binary content and mode 100644. Named,
 unnamed, vendor and nested lines are retained. Branch seeds and tag snapshots are
 explicitly synthetic reconstructions; they do not represent atomic CVS changesets.
-Partially overlapping branch aliases, inconsistent branch declarations, missing
+A branch seed holds the exact fork revision of every file. When its files fork
+from different lines, as when unchanged files of an imported module fork from
+the vendor line or files unchanged on a parent branch fork from the trunk, the
+seed descends from the deepest ordinary branch among them; vendor lines count
+as the line they branch from. Partially overlapping branch aliases, inconsistent branch declarations, missing
 forkpoints and unsafe paths fail closed. Ancestry follows each completely listed
 numeric line and its declared forkpoint, including numbering gaps. Raw RCS delta
 links and original log-string encoding are not exposed by remote CVS. Logs
