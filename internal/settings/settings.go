@@ -17,6 +17,7 @@ import (
 	"cvsgitrelay/internal/canonical"
 	"cvsgitrelay/internal/diag"
 	"cvsgitrelay/internal/relay"
+	"cvsgitrelay/internal/secret"
 )
 
 type Config struct {
@@ -49,7 +50,20 @@ type Destination struct {
 	// Remote is an optional Git URL, such as a GitHub repository, that sync
 	// pushes every published generation to. Repo stays the working store.
 	Remote string `toml:"remote"`
+	// RemoteSecret is the access token for an https Remote, encoded by
+	// "cvsgitrelay encode-secret", or the path of a file that holds it.
+	RemoteSecret string `toml:"remote_secret"`
 }
+
+// RemoteToken returns the decoded access token for the remote, or "" when no
+// remote or secret is configured.
+func (c Config) RemoteToken() (string, error) {
+	if c.Destination.Remote == "" || c.Destination.RemoteSecret == "" {
+		return "", nil
+	}
+	return secret.Load(c.Destination.RemoteSecret)
+}
+
 type Sync struct {
 	Scope       string `toml:"scope"`
 	Connections int    `toml:"connections"`
@@ -142,6 +156,10 @@ func Load(path string) (Config, error) {
 		}
 		return c, diag.New("config", "settings.parse", "unknown configuration options; check example.toml", nil, "file", path, "keys", names)
 	}
+	// A relative secret file belongs to the configuration file's directory too.
+	if v := c.Destination.RemoteSecret; v != "" && !strings.HasPrefix(v, secret.Prefix) && !filepath.IsAbs(v) {
+		c.Destination.RemoteSecret = filepath.Join(filepath.Dir(path), v)
+	}
 	if err := c.Validate(); err != nil {
 		return c, err
 	}
@@ -172,6 +190,17 @@ func (c Config) Validate() error {
 	}
 	if err := relay.ValidateRemote(c.Destination.Remote); err != nil {
 		return invalid("destination.remote", "use a Git URL without whitespace, a leading dash, or an embedded password or token")
+	}
+	if c.Destination.RemoteSecret != "" {
+		if _, err := secret.Load(c.Destination.RemoteSecret); err != nil {
+			return invalid("destination.remote_secret", err.Error())
+		}
+		// Without a remote the secret is unused, so that --remote "" can turn pushing off.
+		if c.Destination.Remote != "" {
+			if err := relay.ValidateRemoteToken(c.Destination.Remote); err != nil {
+				return invalid("destination.remote_secret", "an access token can only be used with an https:// destination.remote")
+			}
+		}
 	}
 	if c.Source.Submodules != "exclude" && c.Source.Submodules != "include" {
 		return invalid("source.submodules", "choose exclude or include")

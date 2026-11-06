@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -56,5 +57,24 @@ func TestProcessHelper(t *testing.T) {
 		_, _ = os.Stdout.WriteString("partial metadata")
 		_, _ = os.Stderr.WriteString("omitting inaccessible file\n")
 		os.Exit(0)
+	}
+}
+
+// Secrets passed to a command are removed from its failure report, both from
+// the arguments and from what the command printed.
+func TestRunnerRedactsSecrets(t *testing.T) {
+	r := Runner{Log: DiscardLogger(), Timeout: time.Second, MaxOutput: 1024, Secrets: []string{"tok-123", ""}}
+	_, err := r.Run(context.Background(), "", nil, nil, "sh", "-c", "echo bad tok-123 >&2; exit 1", "tok-123")
+	if err == nil {
+		t.Fatal("the command succeeded")
+	}
+	report := err.Error() + strings.Join(func() (all []string) {
+		for _, d := range diag.Details(err, false) {
+			all = append(all, strings.TrimSpace(fmt.Sprint(d)))
+		}
+		return
+	}(), "\n")
+	if strings.Contains(report, "tok-123") || !strings.Contains(report, "[redacted]") {
+		t.Fatalf("secret not redacted: %s", report)
 	}
 }

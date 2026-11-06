@@ -21,6 +21,20 @@ type Runner struct {
 	Timeout   time.Duration
 	MaxOutput int
 	Root      string
+	// Secrets are credentials that are passed to commands through their
+	// environment. Diagnostics replace them wherever a command echoes them.
+	Secrets []string
+}
+
+// redact removes the CVSROOT and every secret from diagnostic text.
+func (r *Runner) redact(s string) string {
+	s = diag.Redact(s, r.Root)
+	for _, secret := range r.Secrets {
+		if secret != "" {
+			s = strings.ReplaceAll(s, secret, "[redacted]")
+		}
+	}
+	return s
 }
 
 type buffer struct {
@@ -85,7 +99,7 @@ func (r *Runner) run(ctx context.Context, dir string, env []string, input []byte
 	// CVSROOT is deliberately absent from this safe command description.
 	safe := append([]string(nil), args...)
 	for i := range safe {
-		safe[i] = diag.Redact(safe[i], r.Root)
+		safe[i] = r.redact(safe[i])
 	}
 	start := time.Now()
 	err := cmd.Run()
@@ -109,7 +123,7 @@ func (r *Runner) run(ctx context.Context, dir string, env []string, input []byte
 		if out.total > out.limit {
 			code, message = "limit", "command output exceeds --max-output; raise the limit after checking source size"
 		}
-		fields = append(fields, "stderr_tail", diag.Redact(stderr.String(), r.Root), "stderr_truncated", stderr.total > stderr.limit, "stdout_limit", out.limit)
+		fields = append(fields, "stderr_tail", r.redact(stderr.String()), "stderr_truncated", stderr.total > stderr.limit, "stdout_limit", out.limit)
 		// Some Git diagnostics, particularly fsck object errors, are emitted
 		// on stdout. Only admit known diagnostic commands, never CVS bytes or
 		// cat-file/show output containing source content and log messages.
@@ -120,7 +134,7 @@ func (r *Runner) run(ctx context.Context, dir string, env []string, input []byte
 					if len(data) > 8192 {
 						data = data[len(data)-8192:]
 					}
-					fields = append(fields, "stdout_diagnostic", diag.Redact(string(data), r.Root))
+					fields = append(fields, "stdout_diagnostic", r.redact(string(data)))
 					break
 				}
 			}

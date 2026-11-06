@@ -6,21 +6,26 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"golang.org/x/term"
 
 	"cvsgitrelay/internal/diag"
 	"cvsgitrelay/internal/process"
 	"cvsgitrelay/internal/relay"
+	"cvsgitrelay/internal/secret"
 	"cvsgitrelay/internal/settings"
 )
 
@@ -76,6 +81,7 @@ func newRootCommand(setExit func(int)) *cobra.Command {
 	root.AddCommand(
 		newOperationCommand("status", "Show discovered, imported, and pending CVS revisions from metadata only.", setExit),
 		newOperationCommand("verify", "Check the mirror against CVS and Git integrity rules.", setExit),
+		newEncodeSecretCommand(setExit),
 		newOperationCommand("mirror", "Create or incrementally update a deterministic local CVSROOT.", setExit),
 	)
 	return root
@@ -224,7 +230,11 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	log.Info("Starting " + operation + " with " + configPath)
 	commandTimeout, _ := time.ParseDuration(cfg.Process.CommandTimeout)
 	progressInterval, _ := time.ParseDuration(cfg.Logging.ProgressInterval)
-	runner := &process.Runner{Log: log, Timeout: commandTimeout, MaxOutput: cfg.Process.MaxOutput, Root: cfg.Source.CVSRoot}
+	remoteToken, err := cfg.RemoteToken()
+	if err != nil {
+		return reportFailure(diag.New("config", "settings.secret", "cannot decode destination.remote_secret", nil), cfg.Logging.ErrorStacks)
+	}
+	runner := &process.Runner{Log: log, Timeout: commandTimeout, MaxOutput: cfg.Process.MaxOutput, Root: cfg.Source.CVSRoot, Secrets: []string{remoteToken}}
 	start := time.Now()
 	var summary any
 	if operation == "sync" {
@@ -260,7 +270,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 				case "sync":
 					summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint,
 						MaintenanceInterval: time.Duration(cfg.Maintenance.IntervalDays) * 24 * time.Hour, ContentCheckInterval: time.Duration(cfg.Maintenance.VerifyDays) * 24 * time.Hour,
-						AcceptHistoryChanges: cfg.Sync.AcceptHistoryChanges, Remote: cfg.Destination.Remote})
+						AcceptHistoryChanges: cfg.Sync.AcceptHistoryChanges, Remote: cfg.Destination.Remote, RemoteToken: remoteToken})
 				case "status":
 					summary, err = repository.Status(ctx, cfg.Sync.Scope)
 				case "verify":
@@ -309,4 +319,49 @@ func exitCode(code string) int {
 	default:
 		return 70
 	}
+}
+
+// newEncodeSecretCommand encodes a secret for the configuration. The secret is
+// read from standard input and never from an argument, which would end up in
+// the shell history and in process listings.
+func newEncodeSecretCommand(setExit func(int)) *cobra.Command {
+	return &cobra.Command{
+		Use:           "encode-secret",
+		Short:         "Encode a secret read from stdin for use in the TOML configuration.",
+		Long:          "Read a secret (such as a GitHub access token) from standard input, from a prompt without echo on a terminal, and print its encoded form for destination.remote_secret.",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			plain, err := readSecret(cmd.InOrStdin(), cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			encoded, err := secret.Encode(plain)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), encoded)
+			return err
+		},
+	}
+}
+
+// readSecret reads one secret. A terminal is prompted without echo; piped
+// input is read whole, and the line break that echo or a file adds is dropped.
+func readSecret(in io.Reader, prompts io.Writer) (string, error) {
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		fmt.Fprint(prompts, "Secret (input is hidden): ")
+		data, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(prompts)
+		return string(data), err
+	}
+	data, err := io.ReadAll(io.LimitReader(in, 64<<10+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > 64<<10 {
+		return "", errors.New("the secret exceeds 64 KiB")
+	}
+	return strings.TrimRight(string(data), "\r\n"), nil
 }

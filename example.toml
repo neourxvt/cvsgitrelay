@@ -58,12 +58,29 @@ repo = "./git-rxvt-unicode-v3"
 # remote receives all branches, tags and refs/cvsgitrelay/* (except local
 # bookkeeping), is forced to match the local generation and loses refs the
 # local one no longer has, so give it a dedicated, otherwise empty repository.
-# Authenticate with an SSH key or agent (for example a GitHub deploy key with
-# write access); URLs with an embedded password or token are rejected. A failed
-# push fails the sync (the generation stays published locally), and the next
-# sync pushes again. GitHub's default branch is not set by the push.
+# Authenticate either with an SSH key or agent (for example a GitHub deploy key
+# with write access) or, for an https:// remote, with remote_secret below. URLs
+# with an embedded password or token are rejected. A failed push fails the sync
+# (the generation stays published locally), and the next sync pushes again.
+# GitHub's default branch is not set by the push.
 # CLI override: --remote
 # remote = "git@github.com:OWNER/rxvt-unicode.git"
+
+# Access token for an https:// remote with read and write access, for example a
+# GitHub personal access token. Store it encoded, never as plain text:
+#   printf %s "$TOKEN" | ./cvsgitrelay encode-secret
+# (or run ./cvsgitrelay encode-secret and type it) and paste the output here.
+# The value may also be the path of a file that contains the encoded secret
+# (relative paths belong to the directory of this file), which keeps the token
+# out of this file and lets it have stricter permissions:
+#   printf %s "$TOKEN" | ./cvsgitrelay encode-secret > remote.secret
+# remote_secret = "remote.secret"
+# The token is sent only to the remote, in an Authorization header that is
+# passed through the environment of the push, and is removed from diagnostics.
+# The encoding (XChaCha20-Poly1305 with a key compiled into the program) hides
+# the token from casual reading only; protect this file with its permissions.
+# remote = "https://github.com/OWNER/rxvt-unicode.git"
+# remote_secret = "xc1:..."
 
 [sync]
 # V2 always imports the entire configured scope. Partial scopes are rejected.

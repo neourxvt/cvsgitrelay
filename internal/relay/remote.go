@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"encoding/base64"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,17 +52,45 @@ func ValidateRemote(remote string) error {
 	return nil
 }
 
+// ValidateRemoteToken checks that a token can be sent to the remote. A token is
+// sent only over https, so that it cannot cross the network in clear text, and
+// an ssh remote authenticates with keys instead.
+func ValidateRemoteToken(remote string) error {
+	if u, err := url.Parse(remote); err != nil || u.Scheme != "https" || u.Host == "" {
+		return diag.New("config", "remote.validate", "an access token needs an https:// remote", nil)
+	}
+	return nil
+}
+
+// tokenEnv passes the token to Git as an Authorization header scoped to the
+// remote URL, so that it is not sent to any other host, for example after a
+// redirect. Environment variables keep it out of the command line, which other
+// users of the machine can read, and out of the repository configuration.
+// GitHub accepts any user name with a token as the password.
+func tokenEnv(remote, token string) []string {
+	if token == "" {
+		return nil
+	}
+	header := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
+	return []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http." + remote + ".extraHeader", "GIT_CONFIG_VALUE_0=" + header}
+}
+
 // pushRemote makes the remote match the local projections. The push is atomic,
 // so the remote never shows refs from two generations, and it prunes refs the
 // local generation no longer has, such as deleted tags. A remote that is
 // already current makes this a cheap no-op, which also repairs a push that an
 // earlier sync could not finish. The caller holds the writer lock.
-func (r *Repository) pushRemote(ctx context.Context, remote string) error {
+func (r *Repository) pushRemote(ctx context.Context, remote, token string) error {
 	runner := *r.Runner
 	runner.Timeout = max(runner.Timeout, pushTimeout)
+	if token != "" {
+		// Diagnostics must not repeat the token or its encoded header, should
+		// the server or Git echo them.
+		runner.Secrets = append(slices.Clone(runner.Secrets), token, base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token)))
+	}
 	// Authentication must never wait for a person: ssh fails instead of
 	// prompting, as the sync usually runs from a scheduler.
-	env := []string{"GIT_SSH_COMMAND=ssh -o BatchMode=yes"}
+	env := append([]string{"GIT_SSH_COMMAND=ssh -o BatchMode=yes"}, tokenEnv(remote, token)...)
 	args := append([]string{"push", "--atomic", "--prune", "--no-progress", "--porcelain", "--", remote}, pushRefspecs...)
 	_, err := runner.Run(ctx, "", env, nil, "git", r.gitArgs(args...)...)
 	return err
@@ -70,10 +100,10 @@ func (r *Repository) pushRemote(ctx context.Context, remote string) error {
 // published, so a failure leaves the remote behind but loses nothing; the
 // error is returned after the rest of sync so that a scheduler notices it and
 // the next sync pushes again.
-func (r *Repository) publishRemote(ctx context.Context, remote string) error {
+func (r *Repository) publishRemote(ctx context.Context, remote, token string) error {
 	r.phases.begin("push_remote", "Pushing to the remote")
 	start := time.Now()
-	if err := r.pushRemote(ctx, remote); err != nil {
+	if err := r.pushRemote(ctx, remote, token); err != nil {
 		return diag.New(diag.Code(err), "remote.push", "the generation is published locally, but pushing it to the remote failed; the next sync pushes again", err)
 	}
 	if r.Runner.Log != nil {

@@ -34,7 +34,10 @@ type Options struct {
 	AcceptHistoryChanges bool
 	// Remote is a Git URL that sync pushes the published refs to; empty
 	// disables pushing.
-	Remote      string
+	Remote string
+	// RemoteToken is the access token for an https Remote. It travels only
+	// in the environment of the push and is never logged.
+	RemoteToken string
 	faultCounts map[string]int
 }
 
@@ -181,7 +184,7 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	// It runs after the repack, which makes the upload smaller.
 	var pushErr error
 	if opts.Remote != "" {
-		if pushErr = r.publishRemote(ctx, opts.Remote); pushErr == nil {
+		if pushErr = r.publishRemote(ctx, opts.Remote, opts.RemoteToken); pushErr == nil {
 			s.Pushed = true
 		}
 	}

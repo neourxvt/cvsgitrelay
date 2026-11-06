@@ -170,9 +170,27 @@ relay pushes all branches, tags and `refs/cvsgitrelay/*` to the remote
 backups stay local). The push is atomic and forced, so the remote always shows
 one generation, follows history rewrites, and loses refs that the local
 generation no longer has. Use a dedicated repository that nothing else writes
-to. Authentication is left to SSH, for example a GitHub deploy key with write
+to. Authentication is either SSH, for example a GitHub deploy key with write
 access in the `~/.ssh` of the account that runs the sync (`/var/lib/cvsgitrelay/.ssh`
-for the pyinfra deploy); a URL with an embedded password or token is rejected.
+for the pyinfra deploy), or an access token for an `https://` remote. The token
+is kept in `destination.remote_secret` in encoded form; create it with:
+
+```sh
+printf %s "$TOKEN" | ./cvsgitrelay encode-secret
+```
+
+`encode-secret` reads the secret from standard input, or from a prompt without
+echo on a terminal, never from an argument, and prints the `xc1:...` value for
+the TOML file. Instead of the value, `remote_secret` may name a file that
+holds it (a relative path belongs to the TOML's directory), for example one
+written by `encode-secret > remote.secret` with stricter permissions than the
+configuration. The token is sent only to the configured remote, through the
+environment of the push rather than the command line or the repository
+configuration, and diagnostics replace it. The encoding is XChaCha20-Poly1305
+with a key that is compiled into the program (see `internal/secret`), so it only
+keeps the token from being read off a screen or a diff; the file permissions of
+the configuration are the actual protection. A token cannot be decoded by a
+build with a different key. A URL with an embedded password or token is rejected.
 A failed push fails the sync, which keeps its local publication, and the next
 sync pushes again, even when the source did not change. GitHub's default branch
 is chosen in the repository settings, since a push cannot set it. Large first

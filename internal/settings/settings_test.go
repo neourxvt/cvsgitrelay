@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"cvsgitrelay/internal/secret"
 )
 
 const base = "[source]\nsource_id = \"s\"\ncvsroot = \"/cvs\"\nmodule = \"m\"\n[destination]\nrepo = \"r.git\"\n"
@@ -81,6 +83,62 @@ func TestRemote(t *testing.T) {
 	write("https://user:token@github.com/owner/repo.git")
 	if _, err := Load(path); err == nil {
 		t.Fatal("a remote with a token was accepted")
+	}
+}
+
+// The remote secret must decode, and a token needs an https remote.
+func TestRemoteSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	encoded, err := secret.Encode("ghp_token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	load := func(remote, value string) (Config, error) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(base+"remote = \""+remote+"\"\nremote_secret = \""+value+"\"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(path)
+	}
+	c, err := load("https://github.com/o/r.git", encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token, err := c.RemoteToken(); err != nil || token != "ghp_token" {
+		t.Fatalf("token %q, %v", token, err)
+	}
+	for name, tc := range map[string][2]string{
+		"plain text":  {"https://github.com/o/r.git", "ghp_token"},
+		"ssh remote":  {"git@github.com:o/r.git", encoded},
+		"http remote": {"http://github.com/o/r.git", encoded},
+	} {
+		if _, err := load(tc[0], tc[1]); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	// A file holds the secret too; a relative path belongs to the TOML's directory.
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "token.secret"), []byte(encoded+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"token.secret", filepath.Join(filepath.Dir(path), "token.secret")} {
+		c, err := load("https://github.com/o/r.git", value)
+		if err != nil {
+			t.Fatalf("%s: %v", value, err)
+		}
+		if token, err := c.RemoteToken(); err != nil || token != "ghp_token" {
+			t.Fatalf("file %s: token %q, %v", value, token, err)
+		}
+	}
+	if _, err := load("https://github.com/o/r.git", "missing.secret"); err == nil {
+		t.Error("a missing secret file was accepted")
+	}
+	// --remote "" turns pushing off and leaves the secret unused.
+	c, err = load("", encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token, _ := c.RemoteToken(); token != "" {
+		t.Errorf("token %q without a remote", token)
 	}
 }
 

@@ -2,8 +2,14 @@ package relay
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"cvsgitrelay/internal/diag"
@@ -113,6 +119,52 @@ func TestValidateRemote(t *testing.T) {
 	for _, bad := range []string{"https://user:token@github.com/o/r.git", "-oProxyCommand=x", "a b", "x\ny"} {
 		if err := ValidateRemote(bad); err == nil {
 			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+// The token reaches the server as a Basic authorization header on the first
+// request, and neither the logged command nor a failure report repeats it.
+func TestPushSendsTokenWithoutLeaking(t *testing.T) {
+	root, _, _ := fixture(t)
+	r := openFixture(t, root, "full")
+	const token = "ghp_TESTTOKEN1234567890"
+	var header atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		header.CompareAndSwap(nil, req.Header.Get("Authorization"))
+		http.Error(w, "denied", http.StatusForbidden)
+	}))
+	defer server.Close()
+	var logs strings.Builder
+	r.Runner.Log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	err := r.pushRemote(context.Background(), server.URL+"/owner/repo.git", token)
+	if err == nil {
+		t.Fatal("the denied push succeeded")
+	}
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
+	if got, _ := header.Load().(string); got != want {
+		t.Errorf("authorization header %q, want %q", got, want)
+	}
+	report := fmt.Sprint(diag.Details(err, false)) + logs.String()
+	for _, secret := range []string{token, want[len("Basic "):]} {
+		if strings.Contains(report, secret) {
+			t.Errorf("the token leaked into diagnostics: %s", report)
+		}
+	}
+}
+
+// A token is sent only over https, and only to the configured remote.
+func TestTokenEnvScopedToRemote(t *testing.T) {
+	if env := tokenEnv("https://github.com/o/r.git", ""); env != nil {
+		t.Errorf("environment without a token: %v", env)
+	}
+	env := strings.Join(tokenEnv("https://github.com/o/r.git", "tok"), "\n")
+	if !strings.Contains(env, "GIT_CONFIG_KEY_0=http.https://github.com/o/r.git.extraHeader") {
+		t.Errorf("header not scoped to the remote: %s", env)
+	}
+	for remote, ok := range map[string]bool{"https://github.com/o/r.git": true, "http://github.com/o/r.git": false, "git@github.com:o/r.git": false, "/srv/r.git": false} {
+		if got := ValidateRemoteToken(remote) == nil; got != ok {
+			t.Errorf("%s: token allowed %v, want %v", remote, got, ok)
 		}
 	}
 }
