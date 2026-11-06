@@ -33,8 +33,8 @@ import commits. Restore damaged or removed refs from a complete backup.
 An isolated ref deletion, rewind, unexpected advance, symbolic ref, metadata
 edit or checkpoint edit is rejected. A coordinated rollback of the entire
 repository, including all checkpoint history, cannot be detected without an
-external audit anchor. Keep backups of all exporter refs. Git maintenance and
-backup scheduling are external operations.
+external audit anchor. Keep backups of all exporter refs. Backup scheduling is
+an external operation.
 
 These guarantees cover process interruption. Sudden power loss also depends on
 Git version, `core.fsync`, storage and filesystem behavior. This implementation
@@ -62,6 +62,17 @@ enough:
 
 A persisting 75 can still need attention, for example a server that is down
 for good or a timeout too short for the source; the logged failure names it.
+
+Each sync that writes objects adds one small pack, and a rewritten generation
+leaves its old objects unreachable. Automatic Git GC is disabled because it
+would run outside the writer lock. Set `maintenance.interval_days`, for example
+to 30, and a sync runs `git gc` under its lock whenever that many days have
+passed since the last one. It deletes objects unreachable for more than two
+weeks, so a reader still fetching an older generation can finish. A failed
+GC does not fail the sync: it is logged, reported as `"maintenance":
+"failed"` in the summary and retried by a sync one day later. Without the
+setting, run GC externally while holding `cvsgitrelay.lock`, for example with
+`flock DEST/cvsgitrelay.lock git -C DEST gc`.
 
 Explicit developer interruption points are available through
 `--failpoint [kill:]STAGE[:ORDINAL]`. Stages are `scan-start`, `scan-complete`,

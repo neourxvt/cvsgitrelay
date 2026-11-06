@@ -85,8 +85,14 @@ func (r *Repository) git(ctx context.Context, input []byte, env []string, args .
 // gitAt runs Git with a working directory; the repository is always selected
 // through its absolute --git-dir.
 func (r *Repository) gitAt(ctx context.Context, dir string, input []byte, env []string, args ...string) ([]byte, error) {
+	return r.Runner.Run(ctx, dir, env, input, "git", r.gitArgs(args...)...)
+}
+
+// gitArgs prefixes a Git command line with the destination and the settings
+// every relay Git command uses.
+func (r *Repository) gitArgs(args ...string) []string {
 	prefix := []string{"--git-dir=" + r.Path, "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null", "-c", "gc.auto=0", "-c", "core.fsync=loose-object,reference", "-c", "core.fsyncMethod=fsync", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false", "-c", "i18n.commitEncoding=UTF-8"}
-	return r.Runner.Run(ctx, dir, env, input, "git", append(prefix, args...)...)
+	return append(prefix, args...)
 }
 
 func validOID(s string) bool {

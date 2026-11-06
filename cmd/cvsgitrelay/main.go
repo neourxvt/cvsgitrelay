@@ -249,7 +249,8 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 				repository.RequireConsecutiveRevisions = cfg.Source.RequireConsecutiveRevisions
 				switch operation {
 				case "sync":
-					summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint})
+					summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint,
+						MaintenanceInterval: time.Duration(cfg.Maintenance.IntervalDays) * 24 * time.Hour})
 				case "status":
 					summary, err = repository.Status(ctx, cfg.Sync.Scope)
 				case "verify":

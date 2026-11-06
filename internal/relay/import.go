@@ -21,7 +21,10 @@ type Options struct {
 	// RefreshPermissions makes mirror repeat every historical permission
 	// probe instead of reusing results for unchanged probe targets.
 	RefreshPermissions bool
-	faultCounts        map[string]int
+	// MaintenanceInterval makes sync run Git GC once this much time has
+	// passed since the last one; zero disables it.
+	MaintenanceInterval time.Duration
+	faultCounts         map[string]int
 }
 
 // Summaries identify the configured integrity guarantee on every operation.
@@ -38,7 +41,9 @@ type Summary struct {
 	SourceBytes    int64  `json:"source_bytes"`
 	SourceRequests int    `json:"source_requests"`
 	ObjectWrites   int    `json:"object_writes"`
-	ElapsedMillis  int64  `json:"elapsed_ms"`
+	// Maintenance is "completed" or "failed" when sync ran Git GC.
+	Maintenance   string `json:"maintenance,omitempty"`
+	ElapsedMillis int64  `json:"elapsed_ms"`
 }
 
 func (r *Repository) generationSummary(op string, in canonical.Inventory) Summary {
@@ -110,9 +115,13 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if err := r.cacheAccepted(in); err != nil && r.Runner.Log != nil {
 		r.Runner.Log.Warn("Content cache could not be saved; the next run will re-read source bytes")
 	}
-	// Automatic GC stays disabled, so pack the new loose objects here. The
+	// Automatic GC stays disabled. Scheduled maintenance repacks everything,
+	// including the new loose objects; otherwise pack only those here. The
 	// generation is already published; a failed repack only leaves them loose.
-	if r.objectWrites > 0 {
+	if opts.MaintenanceInterval > 0 {
+		s.Maintenance = r.maintain(ctx, opts.MaintenanceInterval)
+	}
+	if r.objectWrites > 0 && s.Maintenance != "completed" {
 		r.phases.begin("pack_objects", "Packing Git objects", "loose_objects", r.objectWrites)
 		if err := r.packObjects(ctx); err != nil && r.Runner.Log != nil {
 			r.Runner.Log.Warn("New objects could not be packed; they remain loose until the next repack", "code", diag.Code(err))

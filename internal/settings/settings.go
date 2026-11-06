@@ -25,6 +25,7 @@ type Config struct {
 	Verify      Verify      `toml:"verify"`
 	Logging     Logging     `toml:"logging"`
 	Process     Process     `toml:"process"`
+	Maintenance Maintenance `toml:"maintenance"`
 	Debug       Debug       `toml:"debug"`
 	// Authors maps CVS usernames to "Name <email>" Git identities. It is fixed
 	// when a destination is initialized.
@@ -52,6 +53,14 @@ type Sync struct {
 type Verify struct {
 	Mode string `toml:"mode"`
 }
+
+// Maintenance schedules Git GC of the destination as part of sync.
+type Maintenance struct {
+	// IntervalDays is the least number of days between two GC runs; 0
+	// disables them.
+	IntervalDays int `toml:"interval_days"`
+}
+
 type Debug struct {
 	Failpoint string `toml:"failpoint"`
 }
@@ -168,6 +177,9 @@ func (c Config) Validate() error {
 	}
 	if c.Process.MaxOutput <= 0 {
 		return invalid("process.max_output", "output byte limit must be positive")
+	}
+	if c.Maintenance.IntervalDays < 0 {
+		return invalid("maintenance.interval_days", "use a number of days, or 0 to disable maintenance")
 	}
 	for name, identity := range c.Authors {
 		if name == "" || len(name) > canonical.MaxAuthor {

@@ -101,6 +101,18 @@ command_timeout = "5m"
 # Default: 256 MiB. CLI override: --max-output
 max_output = 268435456
 
+[maintenance]
+# Run Git GC on the destination as part of sync once this many days have passed
+# since the last run, for example 30 for about once a month. It packs all
+# reachable objects into one pack and deletes objects that rewritten
+# generations left unreachable for more than two weeks, which is Git's default
+# grace period.
+# It runs under the writer lock after the generation is published. A failure is
+# logged and reported as "maintenance": "failed" in the summary without
+# failing the sync, and is retried by a sync one day later.
+# 0 (default) disables it; maintenance is then an external operation.
+interval_days = 0
+
 [debug]
 # Deliberate interruption for developer recovery checks. Empty disables it.
 # Syntax: "[kill:]STAGE[:ORDINAL]", for example "projection-updated:2".
