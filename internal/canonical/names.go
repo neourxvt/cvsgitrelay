@@ -87,11 +87,16 @@ func (p Policy) lineMessage(line *projectLine) string {
 // sorts at the matching point of the history. The relay still signs it.
 
 // lineTime is the time of the first commit of a line: the trunk root is as old
-// as the oldest trunk revision, and a branch seed as new as the newest fork
-// point among its files, since its tree holds them all.
+// as the oldest trunk revision, and a branch seed as new as the newest live
+// fork point among its files, since its tree holds them all. Dead fork points
+// contribute nothing to the tree and are skipped: adding a file on a branch
+// gives it a dead trunk revision 1.1 as fork point, and counting that would
+// move the date of an existing seed and rewrite the whole branch. A seed with
+// only dead fork points is as old as the oldest of them, which later
+// additions cannot change either.
 func lineTime(line *projectLine) int64 {
-	var t int64
-	set := false
+	var t, dead int64
+	set, deadSet := false, false
 	for _, f := range line.members {
 		switch {
 		case line.id == "trunk":
@@ -100,11 +105,18 @@ func lineTime(line *projectLine) int64 {
 					t, set = r.Time, true
 				}
 			}
+		case f.fork != nil && f.fork.State == "dead":
+			if !deadSet || f.fork.Time < dead {
+				dead, deadSet = f.fork.Time, true
+			}
 		case f.fork != nil:
 			if !set || f.fork.Time > t {
 				t, set = f.fork.Time, true
 			}
 		}
+	}
+	if !set && deadSet {
+		return dead
 	}
 	if !set {
 		return SyntheticTime

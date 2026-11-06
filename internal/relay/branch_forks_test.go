@@ -61,7 +61,8 @@ func gitBlobs(t *testing.T, r *Repository, commit string) map[string]string {
 // Branches whose files fork from different lines are ordinary CVS history:
 // a branch of an imported module forks unchanged files from the vendor line,
 // and a branch of a branch forks the files unchanged there from the trunk.
-// Both sync and match their CVS checkouts.
+// Both sync, match their CVS checkouts, and adding a file on a branch later
+// only appends to it.
 func TestBranchesForkingFromSeveralLines(t *testing.T) {
 	root, _, _ := fixture(t)
 	ctx := context.Background()
@@ -94,5 +95,24 @@ func TestBranchesForkingFromSeveralLines(t *testing.T) {
 		if got, want := gitBlobs(t, r, r.Manifest.Refs[ref]), checkoutBlobs(t, root, name); !maps.Equal(got, want) {
 			t.Fatalf("branch %s differs from its CVS checkout:\n git %v\n cvs %v", name, got, want)
 		}
+	}
+
+	brRef, _, _ := r.Config.Policy.BranchRef("BR")
+	before := r.Manifest.Refs[brRef]
+	writeFixture(t, filepath.Join(work, "lib", "added"), []byte("added on BR\n"))
+	fixtureCVS(t, root, work, "add", "lib/added")
+	fixtureCVS(t, root, work, "commit", "-m", "add on BR", "lib/added")
+	if _, err := r.Sync(ctx, Options{}); err != nil {
+		t.Fatal(diag.Details(err, false))
+	}
+	after := r.Manifest.Refs[brRef]
+	if before == after {
+		t.Fatal("branch did not advance")
+	}
+	if _, err := r.git(ctx, nil, nil, "merge-base", "--is-ancestor", before, after); err != nil {
+		t.Fatal("adding a file on the branch rewrote it instead of appending")
+	}
+	if got, want := gitBlobs(t, r, after), checkoutBlobs(t, root, "BR"); !maps.Equal(got, want) {
+		t.Fatalf("branch BR differs from its CVS checkout:\n git %v\n cvs %v", got, want)
 	}
 }

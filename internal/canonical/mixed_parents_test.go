@@ -138,3 +138,49 @@ func TestBranchOfBranchWithUnchangedFiles(t *testing.T) {
 		t.Fatalf("symbol order changed the generation: %v", e)
 	}
 }
+
+// Adding a file on a branch gives it a dead trunk 1.1 as its fork point. That
+// adds nothing to the seed tree and must not move the seed date, or the whole
+// branch would be rewritten. A seed with only dead fork points takes the
+// oldest one, which later additions cannot move either.
+func TestAddingFileOnBranchKeepsSeed(t *testing.T) {
+	in := Inventory{Records: []Record{
+		record("a", "1.1", "", 100, "live", "a1"),
+		record("a", "1.1.2.1", "1.1", 110, "live", "a on BR"),
+	}, Symbols: []Symbol{{"module/a", "BR", "1.1.2", true}}}
+	before, e := Build(in, policy3())
+	if e != nil {
+		t.Fatal(e)
+	}
+	in.Records = append(in.Records, record("d", "1.1", "", 200, "dead", ""), record("d", "1.1.2.1", "1.1", 200, "live", "d on BR"))
+	in.Symbols = append(in.Symbols, Symbol{"module/d", "BR", "1.1.2", true})
+	after, e := Build(in, policy3())
+	if e != nil {
+		t.Fatal(e)
+	}
+	if a, b := seedCommit(t, before, "CVS branch BR\n"), seedCommit(t, after, "CVS branch BR\n"); a != b {
+		t.Fatal("adding a file on the branch changed its seed commit")
+	}
+	ref, _, _ := policy3().BranchRef("BR")
+	old, tip := before.Manifest.Refs[ref], after.Manifest.Refs[ref]
+	for c := tip; c != old; {
+		parents := commitParents(after, c)
+		if len(parents) != 1 {
+			t.Fatal("old branch tip is not an ancestor of the new one")
+		}
+		c = parents[0]
+	}
+
+	only := Inventory{Records: []Record{
+		record("a", "1.1", "", 100, "live", "a1"),
+		record("d", "1.1", "", 150, "dead", ""), record("d", "1.1.2.1", "1.1", 150, "live", "d"),
+		record("e", "1.1", "", 160, "dead", ""), record("e", "1.1.2.1", "1.1", 160, "live", "e"),
+	}, Symbols: []Symbol{{"module/d", "NEW", "1.1.2", true}, {"module/e", "NEW", "1.1.2", true}}}
+	g, e := Build(only, policy3())
+	if e != nil {
+		t.Fatal(e)
+	}
+	if got := commitTime(t, g, seedCommit(t, g, "CVS branch NEW\n")); got != 150 {
+		t.Errorf("seed of dead fork points dated %d, want the oldest 150", got)
+	}
+}
