@@ -1,2 +1,3 @@
 /cvsgitrelay
 /cvsroot-*
+__pycache__/
