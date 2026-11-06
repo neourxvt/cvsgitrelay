@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -51,5 +53,24 @@ func TestEncodeSecretCommand(t *testing.T) {
 	cmd.SetArgs([]string{"encode-secret"})
 	if err := cmd.Execute(); err == nil {
 		t.Error("an empty secret was encoded")
+	}
+}
+
+// A secret file on the command line belongs to the caller's directory.
+func TestCallerSecretPath(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := secret.Encode("tok")
+	for value, want := range map[string]string{
+		"":              "",
+		"rel.secret":    filepath.Join(wd, "rel.secret"),
+		"/abs/x.secret": "/abs/x.secret",
+		encoded:         encoded,
+	} {
+		if got := callerSecretPath(value); got != want {
+			t.Errorf("%q: %q, want %q", value, got, want)
+		}
 	}
 }

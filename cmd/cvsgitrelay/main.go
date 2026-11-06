@@ -33,6 +33,7 @@ type cliOptions struct {
 	output                      string
 	repo                        string
 	remote                      string
+	remoteSecret                string
 	cvsroot                     string
 	module                      string
 	sourceID                    string
@@ -131,6 +132,7 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 	}
 	if operation == "sync" {
 		flags.StringVar(&options.remote, "remote", "", "override destination.remote: Git URL to push to after sync (empty disables)")
+		flags.StringVar(&options.remoteSecret, "remote-secret", "", "override destination.remote_secret: path of a file with the encoded secret (relative to the caller)")
 		flags.StringVar(&options.failpoint, "failpoint", "", "override debug.failpoint: [kill:]STAGE[:ORDINAL]")
 		flags.BoolVar(&options.acceptHistoryChanges, "accept-history-changes", true, "override sync.accept_history_changes")
 	}
@@ -177,6 +179,8 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			cfg.Destination.Repo = options.repo
 		case "remote":
 			cfg.Destination.Remote = options.remote
+		case "remote-secret":
+			cfg.Destination.RemoteSecret = callerSecretPath(options.remoteSecret)
 		case "cvsroot":
 			cfg.Source.CVSRoot = options.cvsroot
 		case "source-id":
@@ -364,4 +368,17 @@ func readSecret(in io.Reader, prompts io.Writer) (string, error) {
 		return "", errors.New("the secret exceeds 64 KiB")
 	}
 	return strings.TrimRight(string(data), "\r\n"), nil
+}
+
+// callerSecretPath makes a secret file given on the command line relative to
+// the caller, like --repo, instead of to the configuration file. An encoded
+// secret itself and an empty value are kept.
+func callerSecretPath(value string) string {
+	if value == "" || strings.HasPrefix(value, secret.Prefix) {
+		return value
+	}
+	if abs, err := filepath.Abs(value); err == nil {
+		return abs
+	}
+	return value
 }

@@ -75,6 +75,7 @@ repo = "./git-rxvt-unicode-v3"
 # out of this file and lets it have stricter permissions:
 #   printf %s "$TOKEN" | ./cvsgitrelay encode-secret > remote.secret
 # remote_secret = "remote.secret"
+# CLI override: --remote-secret (a path relative to the caller)
 # The token is sent only to the remote, in an Authorization header that is
 # passed through the environment of the push, and is removed from diagnostics.
 # The encoding (XChaCha20-Poly1305 with a key compiled into the program) hides

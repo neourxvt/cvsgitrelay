@@ -184,7 +184,8 @@ echo on a terminal, never from an argument, and prints the `xc1:...` value for
 the TOML file. Instead of the value, `remote_secret` may name a file that
 holds it (a relative path belongs to the TOML's directory), for example one
 written by `encode-secret > remote.secret` with stricter permissions than the
-configuration. The token is sent only to the configured remote, through the
+configuration. `--remote-secret PATH` selects another secret file for one run;
+a relative path then belongs to the caller. The token is sent only to the configured remote, through the
 environment of the push rather than the command line or the repository
 configuration, and diagnostics replace it. The encoding is XChaCha20-Poly1305
 with a key that is compiled into the program (see `internal/secret`), so it only
