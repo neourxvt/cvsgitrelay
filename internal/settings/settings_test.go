@@ -65,6 +65,25 @@ func TestBranchMap(t *testing.T) {
 	}
 }
 
+// The remote is optional and must not embed credentials.
+func TestRemote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	write := func(remote string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(base+"remote = \""+remote+"\"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("git@github.com:owner/repo.git")
+	if c, err := Load(path); err != nil || c.Destination.Remote != "git@github.com:owner/repo.git" {
+		t.Fatalf("remote: %q, %v", c.Destination.Remote, err)
+	}
+	write("https://user:token@github.com/owner/repo.git")
+	if _, err := Load(path); err == nil {
+		t.Fatal("a remote with a token was accepted")
+	}
+}
+
 // Unattended operation is the default: GC and content checks run monthly,
 // changed history is accepted, and an omitted verification mode is left to
 // the destination instead of being pinned here.

@@ -161,6 +161,23 @@ requires a new destination. A listed branch that does not exist in CVS is
 reported as a warning. A CVS branch literally named `trunk` makes the map
 ambiguous and fails the sync.
 
+To publish to a hosted repository such as GitHub, set `destination.remote` (or
+pass `--remote`) to its Git URL. The local `destination.repo` stays the working
+store, because the locks, journal and ref updates above need a local filesystem
+repository. After a successful sync, and after any scheduled maintenance, the
+relay pushes all branches, tags and `refs/cvsgitrelay/*` to the remote
+(including `superseded/` generations; the publication journal and local
+backups stay local). The push is atomic and forced, so the remote always shows
+one generation, follows history rewrites, and loses refs that the local
+generation no longer has. Use a dedicated repository that nothing else writes
+to. Authentication is left to SSH, for example a GitHub deploy key with write
+access in the `~/.ssh` of the account that runs the sync (`/var/lib/cvsgitrelay/.ssh`
+for the pyinfra deploy); a URL with an embedded password or token is rejected.
+A failed push fails the sync, which keeps its local publication, and the next
+sync pushes again, even when the source did not change. GitHub's default branch
+is chosen in the repository settings, since a push cannot set it. Large first
+pushes are subject to GitHub's size limits.
+
 Ordinary refs can expose mixed generations during publication. Consistent readers
 resolve a single state OID and use every target from that manifest:
 

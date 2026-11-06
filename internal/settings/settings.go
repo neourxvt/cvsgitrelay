@@ -16,6 +16,7 @@ import (
 
 	"cvsgitrelay/internal/canonical"
 	"cvsgitrelay/internal/diag"
+	"cvsgitrelay/internal/relay"
 )
 
 type Config struct {
@@ -45,6 +46,9 @@ type Source struct {
 
 type Destination struct {
 	Repo string `toml:"repo"`
+	// Remote is an optional Git URL, such as a GitHub repository, that sync
+	// pushes every published generation to. Repo stays the working store.
+	Remote string `toml:"remote"`
 }
 type Sync struct {
 	Scope       string `toml:"scope"`
@@ -165,6 +169,9 @@ func (c Config) Validate() error {
 	}
 	if c.Destination.Repo == "" {
 		return invalid("destination.repo", "bare Git destination is required")
+	}
+	if err := relay.ValidateRemote(c.Destination.Remote); err != nil {
+		return invalid("destination.remote", "use a Git URL without whitespace, a leading dash, or an embedded password or token")
 	}
 	if c.Source.Submodules != "exclude" && c.Source.Submodules != "include" {
 		return invalid("source.submodules", "choose exclude or include")

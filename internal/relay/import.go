@@ -32,7 +32,10 @@ type Options struct {
 	// accepted revisions changed or disappeared, keeping the replaced
 	// generation under a superseded ref, instead of failing.
 	AcceptHistoryChanges bool
-	faultCounts          map[string]int
+	// Remote is a Git URL that sync pushes the published refs to; empty
+	// disables pushing.
+	Remote      string
+	faultCounts map[string]int
 }
 
 // Summaries identify the configured integrity guarantee on every operation.
@@ -59,8 +62,10 @@ type Summary struct {
 	// instead of the trust-append-only content cache.
 	ContentChecked bool `json:"content_checked,omitempty"`
 	// Maintenance is "completed" or "failed" when sync ran Git GC.
-	Maintenance   string `json:"maintenance,omitempty"`
-	ElapsedMillis int64  `json:"elapsed_ms"`
+	Maintenance string `json:"maintenance,omitempty"`
+	// Pushed is set when sync pushed the generation to the configured remote.
+	Pushed        bool  `json:"pushed,omitempty"`
+	ElapsedMillis int64 `json:"elapsed_ms"`
 }
 
 func (r *Repository) generationSummary(op string, in canonical.Inventory) Summary {
@@ -171,6 +176,15 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 			r.Runner.Log.Warn("New objects could not be packed; they remain loose until the next repack", "code", diag.Code(err))
 		}
 	}
+	// The remote follows the local generation. A failed push does not undo
+	// the local publication, but it fails the sync so that it is noticed.
+	// It runs after the repack, which makes the upload smaller.
+	var pushErr error
+	if opts.Remote != "" {
+		if pushErr = r.publishRemote(ctx, opts.Remote); pushErr == nil {
+			s.Pushed = true
+		}
+	}
 	s.Imported = len(in.Records)
 	s.Pending = 0
 	s.State = r.StateOID
@@ -182,7 +196,7 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	s.SourceRequests = stats.Requests
 	s.ObjectWrites = r.objectWrites
 	s.ElapsedMillis = time.Since(start).Milliseconds()
-	return s, nil
+	return s, pushErr
 }
 
 // Status reports discovery from metadata alone: module definitions and the

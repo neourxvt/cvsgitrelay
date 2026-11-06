@@ -52,6 +52,19 @@ require_consecutive_revisions = false
 # CLI override: --repo
 repo = "./git-rxvt-unicode-v3"
 
+# Optional Git URL, such as a GitHub repository, that every sync pushes the
+# published generation to. The local repo above stays the working store, since
+# its locks, journal and ref updates cannot work against a hosted remote. The
+# remote receives all branches, tags and refs/cvsgitrelay/* (except local
+# bookkeeping), is forced to match the local generation and loses refs the
+# local one no longer has, so give it a dedicated, otherwise empty repository.
+# Authenticate with an SSH key or agent (for example a GitHub deploy key with
+# write access); URLs with an embedded password or token are rejected. A failed
+# push fails the sync (the generation stays published locally), and the next
+# sync pushes again. GitHub's default branch is not set by the push.
+# CLI override: --remote
+# remote = "git@github.com:OWNER/rxvt-unicode.git"
+
 [sync]
 # V2 always imports the entire configured scope. Partial scopes are rejected.
 # CLI override: --scope

@@ -27,6 +27,7 @@ import (
 type cliOptions struct {
 	output                      string
 	repo                        string
+	remote                      string
 	cvsroot                     string
 	module                      string
 	sourceID                    string
@@ -123,6 +124,7 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 		flags.IntVar(&options.connections, "connections", 2, "override sync.connections: maximum concurrent CVS revision fetches")
 	}
 	if operation == "sync" {
+		flags.StringVar(&options.remote, "remote", "", "override destination.remote: Git URL to push to after sync (empty disables)")
 		flags.StringVar(&options.failpoint, "failpoint", "", "override debug.failpoint: [kill:]STAGE[:ORDINAL]")
 		flags.BoolVar(&options.acceptHistoryChanges, "accept-history-changes", true, "override sync.accept_history_changes")
 	}
@@ -167,6 +169,8 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 		switch f.Name {
 		case "repo":
 			cfg.Destination.Repo = options.repo
+		case "remote":
+			cfg.Destination.Remote = options.remote
 		case "cvsroot":
 			cfg.Source.CVSRoot = options.cvsroot
 		case "source-id":
@@ -256,7 +260,7 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 				case "sync":
 					summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint,
 						MaintenanceInterval: time.Duration(cfg.Maintenance.IntervalDays) * 24 * time.Hour, ContentCheckInterval: time.Duration(cfg.Maintenance.VerifyDays) * 24 * time.Hour,
-						AcceptHistoryChanges: cfg.Sync.AcceptHistoryChanges})
+						AcceptHistoryChanges: cfg.Sync.AcceptHistoryChanges, Remote: cfg.Destination.Remote})
 				case "status":
 					summary, err = repository.Status(ctx, cfg.Sync.Scope)
 				case "verify":
