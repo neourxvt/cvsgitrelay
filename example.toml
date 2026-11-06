@@ -77,12 +77,17 @@ accept_history_changes = true
 
 [verify]
 # Fixed canonical source verification policy, applied on every sync/status/verify:
-# "full" (default): re-read and compare all accepted records and content.
-# "trust-append-only": may reuse fingerprinted historical content, allowing
-# silent old-content mutations with unchanged metadata to escape detection
-# between the content checks scheduled by maintenance.verify_days.
-# A change requires a fresh destination. CLI override: --mode
-mode = "full"
+# "trust-append-only" (default for new destinations): read only new revisions
+#   and reuse fingerprinted historical content from a local cache. Contents
+#   changed in the RCS archives with unchanged metadata escape detection until
+#   the next content check scheduled by maintenance.verify_days.
+# "full": re-read and compare all accepted records and content on every sync,
+#   which downloads the whole history twice per run.
+# The mode is fixed when the destination is created; a change requires a fresh
+# destination. Leave it out to keep the mode of an existing destination, which
+# is how a configuration works for destinations of either mode.
+# CLI override: --mode
+# mode = "trust-append-only"
 
 [logging]
 # "text" (default): human-readable progress and indented failure reports;
@@ -116,23 +121,23 @@ max_output = 268435456
 
 [maintenance]
 # Run Git GC on the destination as part of sync once this many days have passed
-# since the last run, for example 30 for about once a month. It packs all
+# since the last run (default 30, about once a month). It packs all
 # reachable objects into one pack and deletes objects that rewritten
 # generations left unreachable for more than two weeks, which is Git's default
 # grace period.
 # It runs under the writer lock after the generation is published. A failure is
 # logged and reported as "maintenance": "failed" in the summary without
 # failing the sync, and is retried by a sync one day later.
-# 0 (default) disables it; maintenance is then an external operation.
-interval_days = 0
+# 0 disables it; maintenance is then an external operation.
+interval_days = 30
 
 # With verify.mode = "trust-append-only", make a sync read every revision from
 # the source instead of the content cache once this many days have passed
-# since the last such sync, for example 30. Such a sync finds contents changed
+# since the last such sync (default 30). Such a sync finds contents changed
 # directly in the RCS archives and handles them like any other changed history
 # (see sync.accept_history_changes); it costs as much as a sync in full mode.
-# 0 (default) disables it. Full mode reads every revision on every sync anyway.
-verify_days = 0
+# 0 disables it. Full mode reads every revision on every sync anyway.
+verify_days = 30
 
 [debug]
 # Deliberate interruption for developer recovery checks. Empty disables it.

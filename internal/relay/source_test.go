@@ -205,6 +205,24 @@ func TestAcceptSourceScansOfLocalMirrors(t *testing.T) {
 	}
 }
 
+// A configuration without a verification mode accepts the pinned one; a named
+// mode must match it.
+func TestRequestedPolicyMode(t *testing.T) {
+	for _, pinned := range []string{"full", "trust-append-only"} {
+		r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: pinned, Format: 3}}}
+		if err := r.ValidateRequestedPolicy("s", "", nil, nil); err != nil {
+			t.Fatalf("omitted mode rejected for a %s destination: %v", pinned, err)
+		}
+		if err := r.ValidateRequestedPolicy("s", pinned, nil, nil); err != nil {
+			t.Fatalf("matching mode rejected: %v", err)
+		}
+	}
+	r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: "full", Format: 3}}}
+	if err := r.ValidateRequestedPolicy("s", "trust-append-only", nil, nil); err == nil {
+		t.Fatal("a different mode was accepted")
+	}
+}
+
 // Both maps are part of the destination's policy and cannot change later.
 func TestRequestedPolicyMaps(t *testing.T) {
 	r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: "full", Format: 3, Authors: map[string]string{"a": "A <a@x>"}, Branches: map[string]string{"trunk": "main"}}}}

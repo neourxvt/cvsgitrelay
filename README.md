@@ -113,15 +113,17 @@ working unchanged; they cannot be converted in place. To switch, sync into a new
 `destination.repo`. Pointing `source.cvsroot` at a local `mirror` output makes
 that conversion read only local files.
 
-`verify.mode = "full"` is the default and is fixed in canonical policy. It detects
-changed historical bytes, log messages, authors, timestamps, states and ancestry,
-and missing revisions. Every unchanged run still re-fetches all live revision
-contents. Dead revisions retain their immutable metadata and deletion event;
+`verify.mode` is fixed in canonical policy when a destination is created.
+`"full"` detects changed historical bytes, log messages, authors, timestamps,
+states and ancestry, and missing revisions on every run, and so re-fetches all
+live revision contents every time. Dead revisions retain their immutable metadata and deletion event;
 the CVS reader consistently represents their unavailable content as absent.
-`"trust-append-only"` explicitly permits reuse of previously fingerprinted content
-from a nonauthoritative local cache. It can miss old-content edits with unchanged
-metadata, unless `maintenance.verify_days` schedules a sync that reads every
-revision again. Damaged or missing caches fall back to source reads. Metadata is always
+`"trust-append-only"`, the default for new destinations, reuses previously
+fingerprinted content from a nonauthoritative local cache. It notices
+old-content edits with unchanged metadata only in the sync that
+`maintenance.verify_days` (default 30) schedules to read every revision again.
+A configuration without `verify.mode` keeps the mode of an existing
+destination. Damaged or missing caches fall back to source reads. Metadata is always
 re-enumerated over the full scope; valid old cached content can skip a checkout.
 Every report and manifest identifies the verification policy. `status` reads
 only module definitions and `rlog` metadata: it reports discovered, imported

@@ -55,8 +55,16 @@ type Sync struct {
 	AcceptHistoryChanges bool `toml:"accept_history_changes"`
 }
 type Verify struct {
+	// Mode is fixed when a destination is created. Empty keeps the mode of
+	// an existing destination and gives a new one DefaultVerifyMode, so a
+	// configuration without it works for destinations of either mode.
 	Mode string `toml:"mode"`
 }
+
+// DefaultVerifyMode is the verification policy of a new destination whose
+// configuration does not name one. Old contents are taken from the cache;
+// the scheduled content check reads them again.
+const DefaultVerifyMode = "trust-append-only"
 
 // Maintenance schedules Git GC of the destination as part of sync.
 type Maintenance struct {
@@ -86,7 +94,7 @@ type Process struct {
 }
 
 func defaults() Config {
-	return Config{Source: Source{Submodules: "exclude"}, Sync: Sync{Scope: "all", Connections: 4, AcceptHistoryChanges: true}, Verify: Verify{Mode: "full"},
+	return Config{Source: Source{Submodules: "exclude"}, Sync: Sync{Scope: "all", Connections: 4, AcceptHistoryChanges: true}, Maintenance: Maintenance{IntervalDays: 30, VerifyDays: 30},
 		Logging: Logging{Format: "text", Level: "info", ErrorStacks: true, ProgressInterval: "15s"},
 		Process: Process{CommandTimeout: "5m", MaxOutput: 256 << 20}}
 }
@@ -167,7 +175,7 @@ func (c Config) Validate() error {
 	if c.Sync.Connections < 1 {
 		return invalid("sync.connections", "CVS connection limit must be positive")
 	}
-	if c.Verify.Mode != "full" && c.Verify.Mode != "trust-append-only" {
+	if c.Verify.Mode != "" && c.Verify.Mode != "full" && c.Verify.Mode != "trust-append-only" {
 		return invalid("verify.mode", "choose full or trust-append-only")
 	}
 	if c.Logging.Format != "text" && c.Logging.Format != "json" {

@@ -64,3 +64,28 @@ func TestBranchMap(t *testing.T) {
 		}
 	}
 }
+
+// Unattended operation is the default: GC and content checks run monthly,
+// changed history is accepted, and an omitted verification mode is left to
+// the destination instead of being pinned here.
+func TestUnattendedDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	if err := os.WriteFile(path, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Verify.Mode != "" || c.Maintenance.IntervalDays != 30 || c.Maintenance.VerifyDays != 30 || !c.Sync.AcceptHistoryChanges {
+		t.Fatalf("unexpected defaults: %+v %+v %+v", c.Verify, c.Maintenance, c.Sync)
+	}
+	for _, mode := range []string{"full", "trust-append-only"} {
+		if err := os.WriteFile(path, []byte(base+"[verify]\nmode = \""+mode+"\"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if c, err := Load(path); err != nil || c.Verify.Mode != mode {
+			t.Fatalf("explicit mode %s: %q, %v", mode, c.Verify.Mode, err)
+		}
+	}
+}

@@ -420,10 +420,11 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 
 // ValidateRequestedPolicy prevents a command-line policy change from silently
 // reinterpreting already accepted source records or the verification guarantee.
+// An empty verify requests no particular mode and accepts the pinned one.
 // The author map is fixed at init because it is part of every event commit,
 // and the branch map because it names every published branch ref.
 func (r *Repository) ValidateRequestedPolicy(source, verify string, authors, branches map[string]string) error {
-	if source != r.Config.SourceID || verify != r.Config.Policy.Verify {
+	if source != r.Config.SourceID || (verify != "" && verify != r.Config.Policy.Verify) {
 		return diag.New("config", "source.policy", "source identity or verification policy differs from the destination; use a new destination", nil)
 	}
 	if !maps.Equal(authors, r.Config.Policy.Authors) {

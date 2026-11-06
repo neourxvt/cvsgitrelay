@@ -77,22 +77,22 @@ source returns to its earlier state, sync publishes exactly the earlier
 generation again. Set `sync.accept_history_changes = false` to fail on every
 such change instead.
 
-With `verify.mode = "trust-append-only"`, a sync reads only new revisions, so
-contents changed directly in the RCS archives go unnoticed. Set
-`maintenance.verify_days`, for example to 30, and a sync reads every revision
-again whenever that many days have passed since the last such sync. It reports
+With `verify.mode = "trust-append-only"`, the default for new destinations, a
+sync reads only new revisions, so contents changed directly in the RCS
+archives go unnoticed for a while. Every `maintenance.verify_days` (default 30,
+0 disables it) a sync reads every revision again. It reports
 `"content_checked": true` and handles changed contents like the changes above.
 
 Each sync that writes objects adds one small pack, and a rewritten generation
 leaves its old objects unreachable. Automatic Git GC is disabled because it
-would run outside the writer lock. Set `maintenance.interval_days`, for example
-to 30, and a sync runs `git gc` under its lock whenever that many days have
-passed since the last one. It deletes objects unreachable for more than two
+would run outside the writer lock. Instead, a sync runs `git gc` under its lock
+whenever `maintenance.interval_days` (default 30) have passed since the last
+one. It deletes objects unreachable for more than two
 weeks, so a reader still fetching an older generation can finish. A failed
 GC does not fail the sync: it is logged, reported as `"maintenance":
-"failed"` in the summary and retried by a sync one day later. Without the
-setting, run GC externally while holding `cvsgitrelay.lock`, for example with
-`flock DEST/cvsgitrelay.lock git -C DEST gc`.
+"failed"` in the summary and retried by a sync one day later. With
+`interval_days = 0`, run GC externally while holding `cvsgitrelay.lock`, for
+example with `flock DEST/cvsgitrelay.lock git -C DEST gc`.
 
 Explicit developer interruption points are available through
 `--failpoint [kill:]STAGE[:ORDINAL]`. Stages are `scan-start`, `scan-complete`,
