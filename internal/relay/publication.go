@@ -389,7 +389,7 @@ func (r *Repository) validateProjections(refs map[string]string, state string, e
 // These explicitly reserved namespaces never participate in canonical equality.
 // The active publication journal remains subject to the stricter checks above.
 func excludedOperationalRef(ref string) bool {
-	return strings.HasPrefix(ref, "refs/cvsgitrelay/backup/") || (strings.HasPrefix(ref, "refs/cvsgitrelay/ops/") && ref != journalRef)
+	return strings.HasPrefix(ref, "refs/cvsgitrelay/backup/") || strings.HasPrefix(ref, supersededPrefix) || (strings.HasPrefix(ref, "refs/cvsgitrelay/ops/") && ref != journalRef)
 }
 
 func (r *Repository) loadCurrent(ctx context.Context) error {

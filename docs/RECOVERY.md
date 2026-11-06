@@ -52,7 +52,7 @@ enough:
 | ---- | ------- | ------ |
 | 0 | Synced, or nothing new | None |
 | 75 | Temporary: CVS stayed unreachable through the built-in retries, the source changed while it was read, another run or `mirror` holds the lock, or a command reached `process.command_timeout` | Retry on the next run; alert only if it persists for several runs |
-| 5 | The source cannot be imported as it is, such as `SOURCE_MUTATED` or `SOURCE_MISSING` after a CVS admin edit, or history that cannot form a canonical graph | Investigate; it repeats until the source or the configuration changes |
+| 5 | The source cannot be imported as it is: history that cannot form a canonical graph, or `SOURCE_MUTATED` or `SOURCE_MISSING` when `sync.accept_history_changes` is off or the change touches most of the published history | Investigate; it repeats until the source or the configuration changes |
 | 6 | Refs of the destination were changed outside the relay | Investigate; restore the refs from a backup |
 | 2, 3 | Invalid command line or configuration | Fix the invocation or configuration |
 | 4 | Unsupported source layout or destination repository | Investigate |
@@ -62,6 +62,20 @@ enough:
 
 A persisting 75 can still need attention, for example a server that is down
 for good or a timeout too short for the source; the logged failure names it.
+
+A CVS administrator can change published history: `cvs admin -m` changes a
+log message, `cvs admin -o` deletes revisions, and deleting an archive on the
+server removes a whole file. By default sync accepts this and rewrites the
+affected branches, as it does for a moved tag. Before publishing, it keeps the
+replaced generation under `refs/cvsgitrelay/superseded/<UTC time>-<state>`
+and logs a warning that lists the changed and removed revisions; the summary
+counts them as `history_changed` and `history_removed`. The relay never moves
+or deletes these refs, so GC keeps that history; delete them once they are not
+needed. A change that touches more than half of the published revisions looks
+like a damaged or misconfigured source and still fails (exit 5). If the
+source returns to its earlier state, sync publishes exactly the earlier
+generation again. Set `sync.accept_history_changes = false` to fail on every
+such change instead.
 
 Each sync that writes objects adds one small pack, and a rewritten generation
 leaves its old objects unreachable. Automatic Git GC is disabled because it

@@ -144,19 +144,70 @@ func validateReportedAncestry(in *Inventory) error {
 	return nil
 }
 
-// Accepted fingerprints are sufficient to compare every immutable field after
-// restart; operational cache/journal contents have no authority over acceptance.
-func (r *Repository) verifyAccepted(in canonical.Inventory) error {
-	current, err := r.verifyListed(in)
-	if err != nil {
-		return err
+// historyChange is a previously accepted revision that the source changed or
+// no longer lists, as after cvs admin -m or -o or a deleted archive.
+type historyChange struct {
+	Key     canonical.Key
+	Removed bool
+}
+
+// historyChanges compares every accepted revision with a complete scan, in
+// the sorted order of the accepted revision IDs.
+func (r *Repository) historyChanges(in canonical.Inventory) []historyChange {
+	current := map[string]canonical.Record{}
+	for _, record := range in.Records {
+		current[record.Key.ID()] = record
 	}
-	for key, old := range r.Manifest.Revisions {
-		if current[key].Fingerprint() != old.Fingerprint {
-			return diag.New("source", "source.verify", "SOURCE_MUTATED: immutable revision record changed", nil, "key_hex", hexBytes(key))
+	var changes []historyChange
+	for _, id := range canonical.SortedKeys(r.Manifest.Revisions) {
+		record, listed := current[id]
+		if listed && record.Fingerprint() == r.Manifest.Revisions[id].Fingerprint {
+			continue
+		}
+		// The manifest stores decodable key bytes; readState validated them.
+		key, _ := canonical.DecodeKey([]byte(id))
+		changes = append(changes, historyChange{Key: key, Removed: !listed})
+	}
+	return changes
+}
+
+// verifyAccepted compares the scan with the accepted fingerprints, which cover
+// every immutable field; operational cache/journal contents have no authority
+// over acceptance. Without accept, any change fails. With accept, the changes
+// are returned for the caller to publish, unless they touch more than half of
+// the accepted revisions: a source that lost or altered most of its history
+// is far more likely damaged or misconfigured than edited, and accepting it
+// would strip the published branches.
+func (r *Repository) verifyAccepted(in canonical.Inventory, accept bool) ([]historyChange, error) {
+	changes := r.historyChanges(in)
+	if len(changes) == 0 {
+		return nil, nil
+	}
+	// Report a disappearance before a changed record, as the listing check
+	// precedes the comparison of contents.
+	first := changes[0]
+	removed := 0
+	for _, c := range changes {
+		if c.Removed {
+			if removed == 0 {
+				first = c
+			}
+			removed++
 		}
 	}
-	return nil
+	id := first.Key.ID()
+	err := diag.New("source", "source.verify", "SOURCE_MUTATED: immutable revision record changed", nil, "key_hex", hexBytes(id))
+	if first.Removed {
+		err = diag.New("source", "source.verify", "SOURCE_MISSING: previously accepted revision disappeared", nil, "key_hex", hexBytes(id))
+	}
+	if !accept {
+		return nil, err
+	}
+	if 2*len(changes) > len(r.Manifest.Revisions) {
+		return nil, diag.New("source", "source.accept-changes", "most accepted revisions changed or disappeared; the source looks damaged rather than edited, so the change is not accepted automatically", err,
+			"changed", len(changes)-removed, "removed", removed, "accepted", len(r.Manifest.Revisions))
+	}
+	return changes, nil
 }
 
 // verifyListed requires every accepted revision to still be listed. It needs
@@ -284,6 +335,7 @@ func stableMirrorSource(root string) (release func(), ok bool, err error) {
 // complete scan is accepted without the confirming second one.
 func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical.Inventory, sourceStats, error) {
 	var stats sourceStats
+	r.changes = nil
 	if err := opts.hit("scan-start"); err != nil {
 		return canonical.Inventory{}, stats, err
 	}
@@ -321,7 +373,8 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 	if r.sourceReader != nil {
 		r.reuseTrusted(&first)
 	}
-	if err := r.verifyAccepted(first); err != nil {
+	changes, err := r.verifyAccepted(first, opts.AcceptHistoryChanges)
+	if err != nil {
 		return first, stats, err
 	}
 	if err := opts.hit("fetch-complete"); err != nil {
@@ -344,7 +397,9 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 		if r.sourceReader != nil {
 			r.reuseTrusted(&second)
 		}
-		if err := r.verifyAccepted(second); err != nil {
+		// Equal digests below imply equal changes, so the first scan's
+		// list stands for both.
+		if _, err := r.verifyAccepted(second, opts.AcceptHistoryChanges); err != nil {
 			return first, stats, err
 		}
 		if first.Digest(r.Config.SourceID) != second.Digest(r.Config.SourceID) {
@@ -356,6 +411,7 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 	if err := opts.hit("scan-complete"); err != nil {
 		return first, stats, err
 	}
+	r.changes = changes
 	if r.Runner.Log != nil {
 		r.Runner.Log.Info("Source verified", "verification_policy", r.Config.Policy.Verify, "scans", scans, "revisions", len(first.Records), "source_requests", stats.Requests, "source_bytes", stats.Bytes)
 	}

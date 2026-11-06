@@ -36,7 +36,9 @@ accepted immutable record, then replays the full canonical graph. Equal final
 source records, symbols and policy produce equal reachable object bytes and the
 same state OID regardless of polling boundaries or discovery order. Newly visible
 older revisions, branch membership changes, moved tags and deleted symbols may
-rewrite project history. A matching second scan is a stability check, not proof
+rewrite project history, and so may revisions changed or removed by a CVS
+administrator, whose replaced history is kept under
+`refs/cvsgitrelay/superseded/` (see [docs/RECOVERY.md](docs/RECOVERY.md)). A matching second scan is a stability check, not proof
 of a repository-wide atomic source snapshot. A local CVSROOT created by `mirror`
 is scanned only once: sync and verify hold a shared lock on the mirror for the
 whole read, `mirror` cannot update it meanwhile, and a sync started while

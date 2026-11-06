@@ -63,6 +63,18 @@ scope = "all"
 # CLI override: --connections
 connections = 1
 
+# What sync does when revisions it already published were changed or removed
+# in CVS, as by cvs admin -m or -o or a deleted archive:
+# true (default): publish the source as it is now, rewriting the affected
+#   branches, and keep the replaced history under
+#   refs/cvsgitrelay/superseded/<UTC time>-<state>, which GC never deletes.
+#   A warning lists the changed and removed revisions. A change touching more
+#   than half of the published revisions looks like a damaged source and still
+#   fails with SOURCE_MUTATED or SOURCE_MISSING.
+# false: fail with SOURCE_MUTATED or SOURCE_MISSING until the source is back.
+# CLI override: --accept-history-changes[=false]
+accept_history_changes = true
+
 [verify]
 # Fixed canonical source verification policy, applied on every sync/status/verify:
 # "full" (default): re-read and compare all accepted records and content.

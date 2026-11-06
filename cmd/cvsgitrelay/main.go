@@ -42,6 +42,7 @@ type cliOptions struct {
 	progressInterval            time.Duration
 	failpoint                   string
 	refreshPermissions          bool
+	acceptHistoryChanges        bool
 }
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -122,6 +123,7 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 	}
 	if operation == "sync" {
 		flags.StringVar(&options.failpoint, "failpoint", "", "override debug.failpoint: [kill:]STAGE[:ORDINAL]")
+		flags.BoolVar(&options.acceptHistoryChanges, "accept-history-changes", true, "override sync.accept_history_changes")
 	}
 	if operation != "mirror" {
 		flags.StringVar(&options.mode, "mode", "full", "override verify.mode: full or trust-append-only (fixed policy)")
@@ -194,6 +196,8 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			cfg.Logging.ProgressInterval = options.progressInterval.String()
 		case "failpoint":
 			cfg.Debug.Failpoint = options.failpoint
+		case "accept-history-changes":
+			cfg.Sync.AcceptHistoryChanges = options.acceptHistoryChanges
 		}
 	})
 	if err := cfg.Validate(); err != nil {
@@ -250,7 +254,8 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 				switch operation {
 				case "sync":
 					summary, err = repository.Sync(ctx, relay.Options{Scope: cfg.Sync.Scope, Connections: cfg.Sync.Connections, ProgressInterval: progressInterval, Failpoint: cfg.Debug.Failpoint,
-						MaintenanceInterval: time.Duration(cfg.Maintenance.IntervalDays) * 24 * time.Hour})
+						MaintenanceInterval:  time.Duration(cfg.Maintenance.IntervalDays) * 24 * time.Hour,
+						AcceptHistoryChanges: cfg.Sync.AcceptHistoryChanges})
 				case "status":
 					summary, err = repository.Status(ctx, cfg.Sync.Scope)
 				case "verify":

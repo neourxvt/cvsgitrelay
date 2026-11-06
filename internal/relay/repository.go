@@ -52,6 +52,9 @@ type Repository struct {
 	lock             *os.File
 	// phases times the steps of the running sync or verify; nil otherwise.
 	phases *phaseTimer
+	// changes lists the accepted revisions that the last accepted source
+	// scan changed or removed.
+	changes []historyChange
 }
 
 func (r *Repository) submodulePolicy() string {

@@ -24,7 +24,11 @@ type Options struct {
 	// MaintenanceInterval makes sync run Git GC once this much time has
 	// passed since the last one; zero disables it.
 	MaintenanceInterval time.Duration
-	faultCounts         map[string]int
+	// AcceptHistoryChanges makes sync publish a source whose previously
+	// accepted revisions changed or disappeared, keeping the replaced
+	// generation under a superseded ref, instead of failing.
+	AcceptHistoryChanges bool
+	faultCounts          map[string]int
 }
 
 // Summaries identify the configured integrity guarantee on every operation.
@@ -41,6 +45,12 @@ type Summary struct {
 	SourceBytes    int64  `json:"source_bytes"`
 	SourceRequests int    `json:"source_requests"`
 	ObjectWrites   int    `json:"object_writes"`
+	// HistoryChanged and HistoryRemoved count the accepted revisions that
+	// the source changed or removed; Superseded names the ref that keeps the
+	// generation they replaced.
+	HistoryChanged int    `json:"history_changed,omitempty"`
+	HistoryRemoved int    `json:"history_removed,omitempty"`
+	Superseded     string `json:"superseded,omitempty"`
 	// Maintenance is "completed" or "failed" when sync ran Git GC.
 	Maintenance   string `json:"maintenance,omitempty"`
 	ElapsedMillis int64  `json:"elapsed_ms"`
@@ -86,6 +96,7 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 		r.phases.finish("Sync phase durations")
 		r.phases = nil
 	}()
+	now := time.Now().UTC()
 	in, stats, err := r.acceptSource(ctx, &opts)
 	if err != nil {
 		return Summary{}, err
@@ -106,8 +117,25 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	}
 	s := r.generationSummary("sync", in)
 	previous := r.StateOID
+	if len(r.changes) > 0 {
+		// Keep the replaced generation before anything can replace it.
+		if s.Superseded, err = r.supersede(ctx, now); err != nil {
+			return Summary{}, err
+		}
+		for _, c := range r.changes {
+			if c.Removed {
+				s.HistoryRemoved++
+			} else {
+				s.HistoryChanged++
+			}
+		}
+	}
 	if err := r.publishGeneration(ctx, g, &opts); err != nil {
 		return Summary{}, err
+	}
+	if len(r.changes) > 0 && r.Runner.Log != nil {
+		r.Runner.Log.Warn("Accepted changed CVS history and rewrote the affected branches; the previous history is kept under "+s.Superseded,
+			"changed", s.HistoryChanged, "removed", s.HistoryRemoved, "revisions", changeList(r.changes, 20))
 	}
 	if r.Config.Policy.Verify == "trust-append-only" {
 		r.phases.begin("save_cache", "Saving content cache", "revisions", len(in.Records))

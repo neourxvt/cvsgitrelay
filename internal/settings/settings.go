@@ -49,6 +49,10 @@ type Destination struct {
 type Sync struct {
 	Scope       string `toml:"scope"`
 	Connections int    `toml:"connections"`
+	// AcceptHistoryChanges publishes a source whose accepted revisions
+	// changed or disappeared, keeping the replaced generation, instead of
+	// stopping until a person intervenes.
+	AcceptHistoryChanges bool `toml:"accept_history_changes"`
 }
 type Verify struct {
 	Mode string `toml:"mode"`
@@ -78,7 +82,7 @@ type Process struct {
 }
 
 func defaults() Config {
-	return Config{Source: Source{Submodules: "exclude"}, Sync: Sync{Scope: "all", Connections: 4}, Verify: Verify{Mode: "full"},
+	return Config{Source: Source{Submodules: "exclude"}, Sync: Sync{Scope: "all", Connections: 4, AcceptHistoryChanges: true}, Verify: Verify{Mode: "full"},
 		Logging: Logging{Format: "text", Level: "info", ErrorStacks: true, ProgressInterval: "15s"},
 		Process: Process{CommandTimeout: "5m", MaxOutput: 256 << 20}}
 }
