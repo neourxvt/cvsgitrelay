@@ -197,6 +197,20 @@ sync pushes again, even when the source did not change. GitHub's default branch
 is chosen in the repository settings, since a push cannot set it. Large first
 pushes are subject to GitHub's size limits.
 
+One TOML file can describe several repositories. Add a `[[repository]]` entry
+with a `name` for each; the top-level tables are then the defaults of all
+entries, an entry overrides single keys by repeating a table, and `{name}` in
+`source_id`, `module`, `destination.repo`, `destination.remote` and
+`destination.remote_secret` stands for the entry's name (see the end of
+[example.toml](example.toml)). One run syncs the entries one after the other, and
+a failing repository does not stop the others. The exit status is that of the
+first failure that needs a person, or 75 when every failure is temporary.
+Summaries of such a file are printed one per line as
+`{"repository": NAME, "summary": {...}}`. `--only NAME[,NAME]` selects entries,
+and flags that name one place (`--repo`, `--remote`, `--module`, `--source-id`,
+`mirror --output`) need exactly one selected repository. A file without entries
+works as before.
+
 Ordinary refs can expose mixed generations during publication. Consistent readers
 resolve a single state OID and use every target from that manifest:
 

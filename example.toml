@@ -209,3 +209,41 @@ failpoint = ""
 # Remote Git imports require only normal CVS read access, without server files.
 # The complete rlog dialect, ancestry and log normalization are specified in
 # doc-format-v2.md.
+
+# Several repositories in one file
+# ================================
+# Without [[repository]] entries this file describes one repository, as above.
+# With entries, one run syncs every entry, one after the other. The tables above
+# (source, destination, sync, verify, maintenance, authors, branches) become the
+# defaults of all entries; logging, process and debug stay settings of the run.
+# An entry names its own tables to override single keys, and its authors and
+# branches are added to the defaults key by key. "{name}" in source_id, module,
+# destination.repo, destination.remote and destination.remote_secret stands for
+# the entry's name, so that similar repositories need only a name:
+#
+#   [source]
+#   cvsroot = ":pserver:anonymous@cvs.schmorp.de:/schmorpforge"
+#   source_id = "schmorp-{name}"
+#   module = "{name}"
+#
+#   [destination]
+#   repo = "/var/lib/cvsgitrelay/{name}.git"
+#   remote = "https://github.com/OWNER/{name}.git"
+#   remote_secret = "remote.secret"          # one token for all of them
+#
+#   [[repository]]
+#   name = "rxvt-unicode"
+#   [repository.branches]
+#   trunk = "main"                            # only this repository
+#
+#   [[repository]]
+#   name = "libev"
+#
+# Names consist of letters, digits, dots, dashes and underscores. Two entries
+# may not share a destination.repo or destination.remote. A failing repository
+# does not stop the ones after it; the exit status is that of the first failure
+# that needs a person, or 75 if every failure is temporary. Summaries are then
+# printed one per line as {"repository": NAME, "summary": {...}}.
+# --only NAME[,NAME] selects entries. Flags that name one place (--repo,
+# --remote, --module, --source-id) and mirror's --output need exactly one
+# selected repository; all other overrides apply to every selected one.

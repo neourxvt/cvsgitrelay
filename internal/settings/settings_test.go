@@ -166,3 +166,91 @@ func TestUnattendedDefaults(t *testing.T) {
 		}
 	}
 }
+
+// multi is a file whose top-level tables are the defaults of its entries.
+const multi = `
+[source]
+cvsroot = "/cvs"
+source_id = "src-{name}"
+module = "{name}"
+[destination]
+repo = "repos/{name}.git"
+remote = "https://github.com/o/{name}.git"
+[sync]
+connections = 3
+[authors]
+root = "Root <root@example.com>"
+`
+
+func loadAll(t *testing.T, content string) ([]Config, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "c.toml")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return LoadAll(path)
+}
+
+// Entries inherit the top-level tables, expand {name}, override single keys
+// and merge the maps, without changing each other.
+func TestRepositoryEntries(t *testing.T) {
+	all, err := loadAll(t, multi+`
+[[repository]]
+name = "a"
+[[repository]]
+name = "b"
+[repository.source]
+module = "other"
+[repository.sync]
+connections = 1
+[repository.authors]
+"j.doe" = "Jane <jane@example.com>"
+[repository.branches]
+trunk = "main"
+`)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("%d repositories, %v", len(all), err)
+	}
+	a, b := all[0], all[1]
+	if a.Name != "a" || a.Source.Module != "a" || a.Source.SourceID != "src-a" || a.Source.CVSRoot != "/cvs" ||
+		a.Destination.Remote != "https://github.com/o/a.git" || a.Sync.Connections != 3 || a.Branches != nil {
+		t.Errorf("first entry: %+v", a)
+	}
+	if !filepath.IsAbs(a.Destination.Repo) || filepath.Base(a.Destination.Repo) != "a.git" {
+		t.Errorf("destination %q", a.Destination.Repo)
+	}
+	// The entry keeps the other source defaults when it overrides one key.
+	if b.Source.Module != "other" || b.Source.SourceID != "src-b" || b.Source.CVSRoot != "/cvs" || b.Sync.Connections != 1 || b.Sync.Scope != "all" {
+		t.Errorf("second entry: %+v %+v", b.Source, b.Sync)
+	}
+	if len(b.Authors) != 2 || len(a.Authors) != 1 || b.Branches["trunk"] != "main" {
+		t.Errorf("maps not merged per entry: %v %v %v", a.Authors, b.Authors, b.Branches)
+	}
+}
+
+// A file without entries is one unnamed repository, as before.
+func TestSingleRepositoryUnchanged(t *testing.T) {
+	all, err := loadAll(t, base)
+	if err != nil || len(all) != 1 || all[0].Name != "" || all[0].Source.Module != "m" {
+		t.Fatalf("%+v, %v", all, err)
+	}
+}
+
+func TestRepositoryEntryErrors(t *testing.T) {
+	for name, content := range map[string]string{
+		"missing name":      multi + "[[repository]]\n",
+		"bad name":          multi + "[[repository]]\nname = \"a/b\"\n",
+		"duplicate name":    multi + "[[repository]]\nname = \"a\"\n[[repository]]\nname = \"a\"\n",
+		"unknown key":       multi + "[[repository]]\nname = \"a\"\nbogus = 1\n",
+		"unknown table key": multi + "[[repository]]\nname = \"a\"\n[repository.sync]\nbogus = 1\n",
+		"whole-run table":   multi + "[[repository]]\nname = \"a\"\n[repository.logging]\nlevel = \"debug\"\n",
+		"shared repo":       multi + "[[repository]]\nname = \"a\"\n[[repository]]\nname = \"b\"\n[repository.destination]\nrepo = \"repos/a.git\"\n",
+		"shared remote":     multi + "[[repository]]\nname = \"a\"\n[[repository]]\nname = \"b\"\n[repository.destination]\nremote = \"https://github.com/o/a.git\"\n",
+		"invalid entry":     multi + "[[repository]]\nname = \"a\"\n[repository.sync]\nconnections = 0\n",
+		"top-level unknown": multi + "bogus = 1\n[[repository]]\nname = \"a\"\n",
+	} {
+		if _, err := loadAll(t, content); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

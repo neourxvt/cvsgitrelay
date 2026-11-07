@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +34,7 @@ type cliOptions struct {
 	output                      string
 	repo                        string
 	remote                      string
+	only                        []string
 	remoteSecret                string
 	cvsroot                     string
 	module                      string
@@ -117,6 +119,7 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 		flags.StringVar(&options.submodules, "submodules", "exclude", "override source.submodules: exclude or include")
 		flags.StringVar(&options.scope, "scope", "all", "override sync.scope: all")
 	}
+	flags.StringSliceVar(&options.only, "only", nil, "run only the named [[repository]] entries (repeatable or comma separated)")
 	flags.StringVar(&options.cvsroot, "cvsroot", "", "override source.cvsroot; use external authentication")
 	flags.StringVar(&options.sourceID, "source-id", "", "override source.source_id: stable logical source identity")
 	flags.StringVar(&options.module, "module", "", "override source.module")
@@ -141,38 +144,13 @@ func addOperationFlags(command *cobra.Command, operation string, options *cliOpt
 	}
 }
 
-func runOperation(operation, configPath string, command *cobra.Command, options *cliOptions) (exit int) {
-	id := make([]byte, 8)
-	_, _ = rand.Read(id)
-	// Configuration failures need readable diagnostics before the chosen handler
-	// is available. Raw TOML parser errors can contain private connection details.
-	log := slog.New(diag.NewTextHandler(os.Stderr, nil)).With("run_id", hex.EncodeToString(id), "command", operation, "config", configPath)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	reportFailure := func(err error, stacks bool) int {
-		if ctx.Err() != nil {
-			log.Warn("Interrupted; shutting down")
-			return 130
-		}
-		diag.Failure(log, err, stacks)
-		return exitCode(diag.Code(err))
-	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			// Panic values can contain source data. Retain type and Go frames,
-			// while omitting the untrusted value and all environment/arguments.
-			log.Error("unexpected panic", "code", "internal", "panic_type", fmt.Sprintf("%T", recovered), "stack", string(debug.Stack()))
-			exit = 70
-		}
-	}()
-	cfg, err := settings.Load(configPath)
-	if err != nil {
-		return reportFailure(err, options.errorStacks)
-	}
-	if ctx.Err() != nil {
-		return reportFailure(ctx.Err(), options.errorStacks)
-	}
-	// Visit only explicit flags so defaults never overwrite values from TOML.
+// identityFlags select values that differ per repository. Applying one of them
+// to several repositories would point them all at the same place.
+var identityFlags = []string{"repo", "remote", "module", "source-id"}
+
+// applyOverrides copies the flags that were passed explicitly over the TOML
+// settings; visiting only explicit flags keeps defaults from overwriting them.
+func applyOverrides(cfg *settings.Config, command *cobra.Command, options *cliOptions) {
 	command.Flags().Visit(func(f *pflag.Flag) {
 		switch f.Name {
 		case "repo":
@@ -215,17 +193,159 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 			cfg.Sync.AcceptHistoryChanges = options.acceptHistoryChanges
 		}
 	})
-	if err := cfg.Validate(); err != nil {
-		return reportFailure(err, cfg.Logging.ErrorStacks)
+}
+
+// selectRepositories applies --only. The repositories keep their file order.
+func selectRepositories(all []settings.Config, only []string) ([]settings.Config, error) {
+	if len(only) == 0 {
+		return all, nil
 	}
+	if all[0].Name == "" {
+		return nil, diag.New("usage", "cli.select", "--only needs a configuration with [[repository]] entries", nil)
+	}
+	var names []string
+	for _, c := range all {
+		names = append(names, c.Name)
+	}
+	for _, name := range only {
+		if !slices.Contains(names, name) {
+			return nil, diag.New("usage", "cli.select", "--only names an unknown repository", nil, "name", name, "repositories", names)
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(all), func(c settings.Config) bool { return !slices.Contains(only, c.Name) }), nil
+}
+
+// combineExit gives the status of a run over several repositories. Any failure
+// that needs a person wins over "retry later" (75), so a scheduler that
+// retries 75 quietly still alerts when one repository is permanently broken.
+func combineExit(codes []int) int {
+	exit := 0
+	for _, code := range codes {
+		switch code {
+		case 0:
+		case 75:
+			exit = 75
+		default:
+			return code
+		}
+	}
+	return exit
+}
+
+// namedSummary labels the summary of one repository of a file with
+// [[repository]] entries; a single-repository file prints its bare summary.
+type namedSummary struct {
+	Repository string `json:"repository"`
+	Summary    any    `json:"summary"`
+}
+
+func runOperation(operation, configPath string, command *cobra.Command, options *cliOptions) (exit int) {
+	id := make([]byte, 8)
+	_, _ = rand.Read(id)
+	runID := hex.EncodeToString(id)
+	// Configuration failures need readable diagnostics before the chosen handler
+	// is available. Raw TOML parser errors can contain private connection details.
+	log := slog.New(diag.NewTextHandler(os.Stderr, nil)).With("run_id", runID, "command", operation, "config", configPath)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			// Panic values can contain source data. Retain type and Go frames,
+			// while omitting the untrusted value and all environment/arguments.
+			log.Error("unexpected panic", "code", "internal", "panic_type", fmt.Sprintf("%T", recovered), "stack", string(debug.Stack()))
+			exit = 70
+		}
+	}()
+	fail := func(log *slog.Logger, err error, stacks bool) int {
+		if ctx.Err() != nil {
+			log.Warn("Interrupted; shutting down")
+			return 130
+		}
+		diag.Failure(log, err, stacks)
+		return exitCode(diag.Code(err))
+	}
+	all, err := settings.LoadAll(configPath)
+	if err != nil {
+		return fail(log, err, options.errorStacks)
+	}
+	if ctx.Err() != nil {
+		return fail(log, ctx.Err(), options.errorStacks)
+	}
+	configs, err := selectRepositories(all, options.only)
+	if err != nil {
+		return fail(log, err, options.errorStacks)
+	}
+	// Flags that name one place cannot apply to several repositories, and a
+	// CVSROOT mirror is written to the single --output directory.
+	if len(configs) > 1 {
+		var conflicting []string
+		command.Flags().Visit(func(f *pflag.Flag) {
+			if slices.Contains(identityFlags, f.Name) {
+				conflicting = append(conflicting, "--"+f.Name)
+			}
+		})
+		if len(conflicting) > 0 {
+			return fail(log, diag.New("usage", "cli.select", "these flags name one repository; select it with --only", nil, "flags", conflicting, "repositories", len(configs)), options.errorStacks)
+		}
+	}
+	if operation == "mirror" && len(configs) != 1 {
+		return fail(log, diag.New("usage", "cli.select", "mirror writes one CVSROOT; select a repository with --only", nil, "repositories", len(configs)), options.errorStacks)
+	}
+	for i := range configs {
+		applyOverrides(&configs[i], command, options)
+		if err := configs[i].Validate(); err != nil {
+			if configs[i].Name != "" {
+				err = diag.New("config", "settings.validate", "invalid configuration of repository "+configs[i].Name, err, "repository", configs[i].Name)
+			}
+			return fail(log, err, configs[i].Logging.ErrorStacks)
+		}
+	}
+	// Logging is a setting of the whole run, so every repository has the same.
+	logging := configs[0].Logging
 	var verbosity slog.Level
-	_ = verbosity.UnmarshalText([]byte(cfg.Logging.Level))
+	_ = verbosity.UnmarshalText([]byte(logging.Level))
 	optionsLog := &slog.HandlerOptions{Level: verbosity}
 	var handler slog.Handler = diag.NewTextHandler(os.Stderr, optionsLog)
-	if cfg.Logging.Format == "json" {
+	if logging.Format == "json" {
 		handler = slog.NewJSONHandler(os.Stderr, optionsLog)
 	}
-	log = slog.New(handler).With("run_id", hex.EncodeToString(id), "command", operation, "config", configPath)
+	log = slog.New(handler).With("run_id", runID, "command", operation, "config", configPath)
+	// One repository after the other: they share the CVS server, and a failure
+	// of one must not keep the others from syncing.
+	var codes []int
+	for _, cfg := range configs {
+		if ctx.Err() != nil {
+			return 130
+		}
+		codes = append(codes, runRepository(ctx, operation, configPath, cfg, options, log, all[0].Name != ""))
+	}
+	if ctx.Err() != nil {
+		return 130
+	}
+	return combineExit(codes)
+}
+
+// runRepository runs one operation for one repository and prints its summary.
+// It returns the exit status; a panic is reported as 70 so that it does not
+// stop the repositories after it.
+func runRepository(ctx context.Context, operation, configPath string, cfg settings.Config, options *cliOptions, log *slog.Logger, labelled bool) (exit int) {
+	if cfg.Name != "" {
+		log = log.With("repository", cfg.Name)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Error("unexpected panic", "code", "internal", "panic_type", fmt.Sprintf("%T", recovered), "stack", string(debug.Stack()))
+			exit = 70
+		}
+	}()
+	reportFailure := func(err error, stacks bool) int {
+		if ctx.Err() != nil {
+			log.Warn("Interrupted; shutting down")
+			return 130
+		}
+		diag.Failure(log, err, stacks)
+		return exitCode(diag.Code(err))
+	}
 	if operation == "mirror" {
 		log = log.With("output", options.output)
 	} else {
@@ -288,6 +408,9 @@ func runOperation(operation, configPath string, command *cobra.Command, options 
 	}
 	if ctx.Err() != nil {
 		return reportFailure(ctx.Err(), cfg.Logging.ErrorStacks)
+	}
+	if labelled {
+		summary = namedSummary{Repository: cfg.Name, Summary: summary}
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(summary); err != nil {
 		return reportFailure(diag.New("io", "cli.output", "write summary", err), cfg.Logging.ErrorStacks)

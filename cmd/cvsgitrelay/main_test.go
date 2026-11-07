@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"cvsgitrelay/internal/secret"
+	"cvsgitrelay/internal/settings"
 )
 
 // Schedulers rely on 75 meaning "run again later" and on every permanent
@@ -72,5 +73,37 @@ func TestCallerSecretPath(t *testing.T) {
 		if got := callerSecretPath(value); got != want {
 			t.Errorf("%q: %q, want %q", value, got, want)
 		}
+	}
+}
+
+// A scheduler that retries 75 quietly must still hear about a repository that
+// needs a person, whatever the order.
+func TestCombineExit(t *testing.T) {
+	for want, codes := range map[int][]int{
+		0: nil, 75: {0, 75, 0}, 5: {75, 5, 0}, 7: {7, 75}, 3: {0, 3, 7},
+	} {
+		if got := combineExit(codes); got != want {
+			t.Errorf("%v: %d, want %d", codes, got, want)
+		}
+	}
+	if got := combineExit([]int{0, 0}); got != 0 {
+		t.Errorf("all succeeded: %d", got)
+	}
+}
+
+func TestSelectRepositories(t *testing.T) {
+	all := []settings.Config{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	got, err := selectRepositories(all, []string{"c", "a"})
+	if err != nil || len(got) != 2 || got[0].Name != "a" || got[1].Name != "c" {
+		t.Fatalf("selection keeps file order: %v, %v", got, err)
+	}
+	if got, err := selectRepositories(all, nil); err != nil || len(got) != 3 {
+		t.Fatalf("no selection: %v, %v", got, err)
+	}
+	if _, err := selectRepositories(all, []string{"x"}); err == nil {
+		t.Error("an unknown name was accepted")
+	}
+	if _, err := selectRepositories([]settings.Config{{}}, []string{"a"}); err == nil {
+		t.Error("--only was accepted for a single-repository file")
 	}
 }
