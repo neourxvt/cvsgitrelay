@@ -75,6 +75,17 @@ def pserver_login_entry(cvsroot: str) -> str | None:
     return f"/1 :pserver:{user}@{hostname}:{port or '2401'}{path} A\n"
 
 
+def repository_tables(config: dict, table: str) -> list[dict]:
+    """Return ``table`` of the top-level settings and of every [[repository]].
+
+    Top-level tables are the defaults of the entries, so deploy checks must
+    look at both to see every value that can take effect.
+    """
+    tables = [config.get(table, {})]
+    tables += [entry.get(table, {}) for entry in config.get("repository", [])]
+    return tables
+
+
 @deploy("Install cvsgitrelay")
 def install(
     config_file: str | Path | None = None,
@@ -87,22 +98,37 @@ def install(
 
     Args:
         config_file: Local TOML configuration; defaults to ``example.toml``.
-            Its ``destination.repo`` is replaced by ``repo_dir``.
-        repo_dir: Bare Git destination, which must be below the state directory.
-            It is created by the first sync.
+            For a single repository its ``destination.repo`` is replaced by
+            ``repo_dir``. A configuration with ``[[repository]]`` entries syncs
+            them all in one run and keeps its own ``destination.repo`` paths,
+            which must be absolute and below the state directory.
+        repo_dir: Bare Git destination of a single-repository configuration,
+            which must be below the state directory. It is created by the first
+            sync. Ignored when the configuration has ``[[repository]]`` entries.
         install_dir: Directory containing the installed executable.
         interval: Time between the end of one sync and the start of the next.
         secrets: Local file with the encoded remote secret (the access token for
             an ``https://`` ``destination.remote``), as written by
             ``cvsgitrelay encode-secret``. It is installed readable by the
             service account only and passed to the service as
-            ``--remote-secret``, overriding ``destination.remote_secret``.
-            A relative path is relative to the working directory of the deploy.
+            ``--remote-secret``, overriding ``destination.remote_secret`` of
+            every repository. A relative path is relative to the working directory of the deploy.
     """
     source_config = Path(config_file) if config_file is not None else DEFAULT_CONFIG
     with source_config.open("rb") as handle:
         config = tomllib.load(handle)
 
+    multiple = bool(config.get("repository"))
+    # The sync may only write below the state directory, and a relative path
+    # would end up beside the configuration in /etc.
+    if multiple:
+        for destination in repository_tables(config, "destination"):
+            repo = destination.get("repo")
+            if repo is not None and not repo.startswith(f"{STATE_DIR}/"):
+                raise ValueError(
+                    f"destination.repo {repo!r} in {source_config} must be an "
+                    f"absolute path below {STATE_DIR}"
+                )
     # Fail before any change when the secret file is missing, instead of
     # installing a service whose every run fails on it.
     secret_file = Path(secrets).expanduser() if secrets is not None else None
@@ -110,7 +136,9 @@ def install(
         raise FileNotFoundError(f"cvsgitrelay secret file not found: {secret_file}")
     # The secret is only used for pushing, which needs a remote. Without one it
     # would be silently ignored, so say so.
-    if secret_file is not None and not config.get("destination", {}).get("remote"):
+    if secret_file is not None and not any(
+        destination.get("remote") for destination in repository_tables(config, "destination")
+    ):
         logger.warning(
             "cvsgitrelay: a secret is deployed but %s sets no destination.remote, "
             "so nothing is pushed",
@@ -163,11 +191,16 @@ def install(
 
     # Anonymous pserver sources need a stored login in the service account's
     # home, which the unit points HOME at.
-    login = pserver_login_entry(config.get("source", {}).get("cvsroot", ""))
-    if login is not None:
+    # Every repository can have its own CVSROOT; one login line per distinct one.
+    logins = []
+    for source in repository_tables(config, "source"):
+        login = pserver_login_entry(source.get("cvsroot", ""))
+        if login is not None and login not in logins:
+            logins.append(login)
+    if logins:
         files.put(
             name="Store the anonymous CVS pserver login",
-            src=StringIO(login),
+            src=StringIO("".join(logins)),
             dest=f"{STATE_DIR}/.cvspass",
             user=SERVICE_USER,
             group=SERVICE_USER,
@@ -212,7 +245,11 @@ def install(
         _sudo=True,
     )
 
-    exec_start = f"{executable} {config_path} --repo {repo_dir}"
+    # --repo names one destination, so repositories of a multi-repository
+    # configuration use the paths of the configuration itself.
+    exec_start = f"{executable} {config_path}"
+    if not multiple:
+        exec_start += f" --repo {repo_dir}"
     if secret_file is not None:
         exec_start += f" --remote-secret {REMOTE_SECRET_PATH}"
 
