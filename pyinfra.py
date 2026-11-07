@@ -17,7 +17,7 @@ from io import StringIO
 from pathlib import Path
 from textwrap import dedent
 
-from pyinfra import host
+from pyinfra import host, logger
 from pyinfra.api import deploy
 from pyinfra.facts.files import Sha256File
 from pyinfra.operations import files, pacman, server, systemd
@@ -31,6 +31,8 @@ SERVICE_USER = "cvsgitrelay"
 # The service owns this directory; the Git destination and the CVS login file
 # of the service account live below it.
 STATE_DIR = "/var/lib/cvsgitrelay"
+# The encoded remote secret is stored here when ``install`` gets one.
+REMOTE_SECRET_PATH = f"{STATE_DIR}/remote.secret"
 
 
 def backup_locations() -> list[str]:
@@ -79,6 +81,7 @@ def install(
     repo_dir: str = f"{STATE_DIR}/repo.git",
     install_dir: str = "/opt/cvsgitrelay",
     interval: str = "1h",
+    secrets: str | Path | None = None,
 ):
     """Install cvsgitrelay and sync CVS into a Git repository on a schedule.
 
@@ -89,10 +92,30 @@ def install(
             It is created by the first sync.
         install_dir: Directory containing the installed executable.
         interval: Time between the end of one sync and the start of the next.
+        secrets: Local file with the encoded remote secret (the access token for
+            an ``https://`` ``destination.remote``), as written by
+            ``cvsgitrelay encode-secret``. It is installed readable by the
+            service account only and passed to the service as
+            ``--remote-secret``, overriding ``destination.remote_secret``.
+            A relative path is relative to the working directory of the deploy.
     """
     source_config = Path(config_file) if config_file is not None else DEFAULT_CONFIG
     with source_config.open("rb") as handle:
         config = tomllib.load(handle)
+
+    # Fail before any change when the secret file is missing, instead of
+    # installing a service whose every run fails on it.
+    secret_file = Path(secrets).expanduser() if secrets is not None else None
+    if secret_file is not None and not secret_file.is_file():
+        raise FileNotFoundError(f"cvsgitrelay secret file not found: {secret_file}")
+    # The secret is only used for pushing, which needs a remote. Without one it
+    # would be silently ignored, so say so.
+    if secret_file is not None and not config.get("destination", {}).get("remote"):
+        logger.warning(
+            "cvsgitrelay: a secret is deployed but %s sets no destination.remote, "
+            "so nothing is pushed",
+            source_config,
+        )
 
     executable = f"{install_dir}/cvsgitrelay"
     config_path = "/etc/cvsgitrelay.toml"
@@ -152,6 +175,20 @@ def install(
             _sudo=True,
         )
 
+    # The token must be readable by the service only. The encoding is just
+    # obfuscation, so the file permissions are the actual protection.
+    if secret_file is not None:
+        files.put(
+            name="Install the cvsgitrelay remote secret",
+            src=str(secret_file),
+            dest=REMOTE_SECRET_PATH,
+            add_deploy_dir=False,
+            user=SERVICE_USER,
+            group=SERVICE_USER,
+            mode="0400",
+            _sudo=True,
+        )
+
     # The service is a oneshot started by the timer, so a changed executable
     # or configuration needs no restart; the next run picks it up.
     files.put(
@@ -175,6 +212,10 @@ def install(
         _sudo=True,
     )
 
+    exec_start = f"{executable} {config_path} --repo {repo_dir}"
+    if secret_file is not None:
+        exec_start += f" --remote-secret {REMOTE_SECRET_PATH}"
+
     # The first import can take hours, so the unit has no start timeout.
     # Exit status 75 means a temporary failure that the next run resolves.
     service_unit = dedent(
@@ -189,7 +230,7 @@ def install(
         User={SERVICE_USER}
         Group={SERVICE_USER}
         Environment=HOME={STATE_DIR}
-        ExecStart={executable} {config_path} --repo {repo_dir}
+        ExecStart={exec_start}
         TimeoutStartSec=infinity
 
         # The sync only writes below its state directory.
