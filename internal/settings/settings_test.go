@@ -35,10 +35,20 @@ func TestAuthorMap(t *testing.T) {
 	}
 }
 
-// The documented example configuration must stay loadable.
+// The documented example configuration must stay loadable, and its entries
+// must resolve to distinct repositories of their own names.
 func TestExampleLoads(t *testing.T) {
-	if _, err := Load("../../example.toml"); err != nil {
+	all, err := LoadAll("../../example.toml")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].Name != "rxvt-unicode" || all[1].Name != "libev" {
+		t.Fatalf("unexpected repositories: %+v", all)
+	}
+	for _, c := range all {
+		if c.Source.Module != c.Name || c.Source.SourceID != "schmorp-"+c.Name || filepath.Base(c.Destination.Repo) != "git-"+c.Name+"-v3" {
+			t.Errorf("%s resolved to %+v %+v", c.Name, c.Source, c.Destination)
+		}
 	}
 }
 

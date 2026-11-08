@@ -1,31 +1,43 @@
-# Import directly from remote CVS into a fresh (format 3) Git destination:
+# This file describes several repositories at once, one [[repository]] entry
+# each (see the end of the file). The tables before the entries are the
+# defaults of all of them. A file without [[repository]] entries describes one
+# repository with the very same tables.
+#
+# Import directly from remote CVS into fresh (format 3) Git destinations:
 #   ./cycle.sh example.toml
 #   ./cycle.sh status example.toml
 #   ./cycle.sh verify example.toml
-# Optional independent CVS-to-CVS mirror:
-#   ./cycle.sh mirror example.toml --output ./cvsroot-rxvt-unicode
+# Only some of the repositories (--only works for every command):
+#   ./cycle.sh example.toml --only rxvt-unicode
+# Optional independent CVS-to-CVS mirror, which writes one CVSROOT and therefore
+# needs exactly one selected repository:
+#   ./cycle.sh mirror example.toml --only rxvt-unicode --output ./cvsroot-rxvt-unicode
 # Mirror incrementally copies all revision lines and included modules; it does not
 # use destination.repo, sync.scope or source.submodules.
 #
 # This file documents every configurable setting. Omitted optional settings use
 # the defaults shown below. Unknown keys and invalid values are rejected.
+# "{name}" in source_id, module, destination.repo, destination.remote and
+# destination.remote_secret stands for the name of the [[repository]] entry.
 # Existing CLI options override matching settings only when explicitly passed;
 # A TOML path is always required. Relative destination paths are relative to this
 # TOML file, while an explicit --repo override is relative to the caller.
 
 [source]
 # Required operator-assigned stable logical source identity. Reuse for aliases
-# of this source. CLI override: --source-id
-source_id = "schmorp-rxvt-unicode"
+# of this source. Every repository needs its own, so it contains {name}.
+# CLI override: --source-id (needs exactly one selected repository)
+source_id = "schmorp-{name}"
 
 # Required CVS locator. Use CVS authentication facilities for credentials;
 # passwords embedded in CVSROOT are rejected. Never commit private credentials.
 # CLI override: --cvsroot
 cvsroot = ":pserver:anonymous@cvs.schmorp.de:/schmorpforge"
 
-# Required CVS directory or supported composite module alias.
-# CLI override: --module
-module = "rxvt-unicode"
+# Required CVS directory or supported composite module alias. Here every
+# repository is the module of its own name.
+# CLI override: --module (needs exactly one selected repository)
+module = "{name}"
 
 # How to handle included CVS modules such as libev and libecb:
 # "exclude" (default): omit their directories AND revision histories from Git.
@@ -48,9 +60,12 @@ require_consecutive_revisions = false
 
 [destination]
 # Required dedicated bare Git destination. Sync initializes it automatically.
-# Use a fresh directory; nonempty unmanaged repositories are rejected.
-# CLI override: --repo
-repo = "./git-rxvt-unicode-v3"
+# Use a fresh directory; nonempty unmanaged repositories are rejected. Two
+# repositories may not share one, so it contains {name}. A deployment with
+# pyinfra.py needs an absolute path below its state directory instead, such as
+# "/var/lib/cvsgitrelay/{name}.git".
+# CLI override: --repo (needs exactly one selected repository)
+repo = "./git-{name}-v3"
 
 # Optional Git URL, such as a GitHub repository, that every sync pushes the
 # published generation to. The local repo above stays the working store, since
@@ -62,9 +77,10 @@ repo = "./git-rxvt-unicode-v3"
 # with write access) or, for an https:// remote, with remote_secret below. URLs
 # with an embedded password or token are rejected. A failed push fails the sync
 # (the generation stays published locally), and the next sync pushes again.
-# GitHub's default branch is not set by the push.
-# CLI override: --remote
-# remote = "git@github.com:OWNER/rxvt-unicode.git"
+# GitHub's default branch is not set by the push. Two repositories may not share
+# a remote, so it contains {name}.
+# CLI override: --remote (needs exactly one selected repository)
+# remote = "git@github.com:OWNER/{name}.git"
 
 # Access token for an https:// remote with read and write access, for example a
 # GitHub personal access token. Store it encoded, never as plain text:
@@ -75,12 +91,15 @@ repo = "./git-rxvt-unicode-v3"
 # out of this file and lets it have stricter permissions:
 #   printf %s "$TOKEN" | ./cvsgitrelay encode-secret > remote.secret
 # remote_secret = "remote.secret"
-# CLI override: --remote-secret (a path relative to the caller)
+# One token can serve all repositories, as above, or contain {name} to name a
+# file or token per repository.
+# CLI override: --remote-secret (a path relative to the caller, applies to every
+# selected repository)
 # The token is sent only to the remote, in an Authorization header that is
 # passed through the environment of the push, and is removed from diagnostics.
 # The encoding (XChaCha20-Poly1305 with a key compiled into the program) hides
 # the token from casual reading only; protect this file with its permissions.
-# remote = "https://github.com/OWNER/rxvt-unicode.git"
+# remote = "https://github.com/OWNER/{name}.git"
 # remote_secret = "xc1:..."
 
 [sync]
@@ -210,40 +229,34 @@ failpoint = ""
 # The complete rlog dialect, ancestry and log normalization are specified in
 # doc-format-v2.md.
 
-# Several repositories in one file
-# ================================
-# Without [[repository]] entries this file describes one repository, as above.
-# With entries, one run syncs every entry, one after the other. The tables above
-# (source, destination, sync, verify, maintenance, authors, branches) become the
-# defaults of all entries; logging, process and debug stay settings of the run.
-# An entry names its own tables to override single keys, and its authors and
-# branches are added to the defaults key by key. "{name}" in source_id, module,
-# destination.repo, destination.remote and destination.remote_secret stands for
-# the entry's name, so that similar repositories need only a name:
+# Repositories
+# ============
+# One run syncs every entry, one after the other, since they share the CVS
+# server. The tables above (source, destination, sync, verify, maintenance,
+# authors, branches) are the defaults of all entries; logging, process and
+# debug stay settings of the run. An entry names its own tables to override
+# single keys, and its authors and branches are added to the defaults key by
+# key. Names consist of letters, digits, dots, dashes and underscores.
 #
-#   [source]
-#   cvsroot = ":pserver:anonymous@cvs.schmorp.de:/schmorpforge"
-#   source_id = "schmorp-{name}"
-#   module = "{name}"
-#
-#   [destination]
-#   repo = "/var/lib/cvsgitrelay/{name}.git"
-#   remote = "https://github.com/OWNER/{name}.git"
-#   remote_secret = "remote.secret"          # one token for all of them
-#
-#   [[repository]]
-#   name = "rxvt-unicode"
-#   [repository.branches]
-#   trunk = "main"                            # only this repository
-#
-#   [[repository]]
-#   name = "libev"
-#
-# Names consist of letters, digits, dots, dashes and underscores. Two entries
-# may not share a destination.repo or destination.remote. A failing repository
-# does not stop the ones after it; the exit status is that of the first failure
-# that needs a person, or 75 if every failure is temporary. Summaries are then
-# printed one per line as {"repository": NAME, "summary": {...}}.
+# A failing repository does not stop the ones after it; the exit status is that
+# of the first failure that needs a person, or 75 if every failure is
+# temporary. Summaries are then printed one per line as
+# {"repository": NAME, "summary": {...}}.
 # --only NAME[,NAME] selects entries. Flags that name one place (--repo,
 # --remote, --module, --source-id) and mirror's --output need exactly one
 # selected repository; all other overrides apply to every selected one.
+
+# Destination ./git-rxvt-unicode-v3 and module rxvt-unicode, from the defaults.
+# Included CVS modules (libev, libecb) stay excluded, as submodules = "exclude"
+# says, since libev is a repository of its own below.
+[[repository]]
+name = "rxvt-unicode"
+# An entry can override single keys of any default table, for example:
+# [repository.branches]
+# trunk = "main"                  # only this repository publishes "main"
+
+# Destination ./git-libev-v3 and module libev, from the defaults.
+[[repository]]
+name = "libev"
+# [repository.sync]
+# connections = 4                 # only this repository reads in parallel

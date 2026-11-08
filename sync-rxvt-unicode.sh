@@ -5,7 +5,8 @@ set -euo pipefail
 project_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 # An optional first path selects another configuration; remaining args are
-# sync overrides. Without a path, use the documented rxvt-unicode example.
+# sync overrides. Without a path, use the documented example, which describes
+# several repositories (select one with --only rxvt-unicode).
 config_file="$project_dir/example.toml"
 if [[ $# -gt 0 && "$1" != -* ]]; then
     config_file=$1
