@@ -65,7 +65,7 @@ require_consecutive_revisions = false
 # pyinfra.py needs an absolute path below its state directory instead, such as
 # "/var/lib/cvsgitrelay/{name}.git".
 # CLI override: --repo (needs exactly one selected repository)
-repo = "./git-{name}-v3"
+# repo = "./git-{name}-v3"
 
 # Optional Git URL, such as a GitHub repository, that every sync pushes the
 # published generation to. The local repo above stays the working store, since
@@ -80,7 +80,7 @@ repo = "./git-{name}-v3"
 # GitHub's default branch is not set by the push. Two repositories may not share
 # a remote, so it contains {name}.
 # CLI override: --remote (needs exactly one selected repository)
-# remote = "git@github.com:OWNER/{name}.git"
+remote = "https://github.com/neourxvt/{name}.git"
 
 # Access token for an https:// remote with read and write access, for example a
 # GitHub personal access token. Store it encoded, never as plain text:
