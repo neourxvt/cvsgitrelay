@@ -94,7 +94,7 @@ def install(
     interval: str = "1h",
     secrets: str | Path | None = None,
 ):
-    """Install cvsgitrelay and sync CVS into a Git repository on a schedule.
+    """Install cvsgitrelay, trigger a sync immediately, and schedule future syncs.
 
     Args:
         config_file: Local TOML configuration; defaults to ``example.toml``.
@@ -318,8 +318,6 @@ def install(
         _sudo=True,
     )
 
-    # Starting the timer (not the service) keeps the deploy from waiting for a
-    # long sync; an overdue timer starts the first sync right away.
     systemd.service(
         name="Enable and start the cvsgitrelay timer",
         service="cvsgitrelay.timer",
@@ -327,5 +325,13 @@ def install(
         restarted=timer_changed,
         enabled=True,
         daemon_reload=True,
+        _sudo=True,
+    )
+
+    # Queue a sync after installation even when the timer was already running.
+    # Do not wait for a long import or interrupt a sync that is already active.
+    server.shell(
+        name="Trigger an immediate cvsgitrelay sync",
+        commands="systemctl --no-block start cvsgitrelay.service",
         _sudo=True,
     )
