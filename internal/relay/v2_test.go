@@ -21,9 +21,10 @@ import (
 
 // Most tests call t.Parallel: their time is spent in CVS sleeping to the next
 // whole second after it writes files, not in CPU work. Every test builds its
-// own CVS root and destinations. Tests that set environment variables or
-// replace package variables stay serial; Go runs them before resuming the
-// parallel ones, so the changes never overlap.
+// own CVS root and destinations. Tests that set environment variables, replace
+// package variables or expect a closed file lock to be free at once stay
+// serial; Go runs them before resuming the parallel ones, so they never
+// overlap.
 func testRunner() *process.Runner {
 	return &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 32 << 20}
 }

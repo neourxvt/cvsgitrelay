@@ -154,8 +154,11 @@ func TestSourceConnections(t *testing.T) {
 // A locked local cvsgitrelay mirror is read once, blocks a concurrent mirror
 // update while it is read, and is refused while mirror holds its lock. Every
 // other source keeps the confirming second scan.
+//
+// The test stays serial. A flock belongs to the open file description, and a
+// child that a parallel test forks holds a copy of every descriptor until it
+// execs, so the released shared lock could still appear held.
 func TestAcceptSourceScansOfLocalMirrors(t *testing.T) {
-	t.Parallel()
 	plain := t.TempDir()
 	mirror := t.TempDir()
 	lockPath := filepath.Join(mirror, mirrorStateDir, "lock")
