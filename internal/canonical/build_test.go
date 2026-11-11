@@ -325,35 +325,40 @@ func BenchmarkFullReplay(b *testing.B) {
 }
 
 // The incremental replay tree must emit exactly the trees, and tree objects,
-// that the reference encoder produces from the complete file map.
+// that the reference encoder produces from the complete file map, including
+// files whose executable bit changes while their content stays the same.
 func TestLineTreeMatchesReferenceTree(t *testing.T) {
 	random := rand.New(rand.NewSource(1))
 	paths := []string{"a", "b", "d/a", "d/b", "d/e", "d/e/a", "d/e/f/g", "d-x", "d.x", "e/a", "e/b/c", "z"}
 	files := map[string]string{}
+	executable := map[string]bool{}
 	incremental, reference := Objects{}, Objects{}
 	tree := newLineTree(incremental)
 	for step := 0; step < 2000; step++ {
 		path := paths[random.Intn(len(paths))]
 		if random.Intn(3) == 0 {
 			delete(files, path)
+			delete(executable, path)
 			tree.remove(path)
 		} else {
 			blob := OID("blob", []byte{byte(random.Intn(4))})
+			exec := random.Intn(2) == 0
 			// Skip moves that the reference would reject as file/directory conflicts.
 			candidate := maps.Clone(files)
 			candidate[path] = blob
 			if _, err := (Objects{}).Tree(candidate); err != nil {
-				if tree.set(path, blob) == nil {
+				if tree.set(path, blob, exec) == nil {
 					t.Fatalf("step %d: conflict accepted for %s", step, path)
 				}
 				continue
 			}
 			files = candidate
-			if err := tree.set(path, blob); err != nil {
+			executable[path] = exec
+			if err := tree.set(path, blob, exec); err != nil {
 				t.Fatal(err)
 			}
 		}
-		want, err := reference.Tree(files)
+		want, err := reference.TreeModes(files, executable)
 		if err != nil {
 			t.Fatal(err)
 		}

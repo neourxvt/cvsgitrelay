@@ -228,7 +228,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 						anchor = r
 					}
 					if r.State == "live" {
-						if e := files.set(r.Path, blobs[r.Key.ID()]); e != nil {
+						if e := files.set(r.Path, blobs[r.Key.ID()], r.Executable); e != nil {
 							return Generation{}, e
 						}
 					}
@@ -277,7 +277,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				r := pending[queue.pop()]
 				if r.State == "dead" {
 					files.remove(r.Path)
-				} else if e := files.set(r.Path, blobs[r.Key.ID()]); e != nil {
+				} else if e := files.set(r.Path, blobs[r.Key.ID()], r.Executable); e != nil {
 					return Generation{}, e
 				}
 				parent = g.Objects.Event(p, r, files.oid(), parent)
@@ -337,6 +337,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		slices.SortFunc(selected, func(a, b Record) int { return strings.Compare(a.Path, b.Path) })
 		b := U(uint64(len(selected)))
 		files := map[string]string{}
+		executable := map[string]bool{}
 		for i, r := range selected {
 			if i > 0 && selected[i-1].Path == r.Path {
 				return Generation{}, fmt.Errorf("duplicate tag path")
@@ -345,9 +346,10 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			b = append(b, B(pair)...)
 			if r.State == "live" {
 				files[r.Path] = blobs[r.Key.ID()]
+				executable[r.Path] = r.Executable
 			}
 		}
-		tree, e := g.Objects.Tree(files)
+		tree, e := g.Objects.TreeModes(files, executable)
 		if e != nil {
 			return Generation{}, e
 		}

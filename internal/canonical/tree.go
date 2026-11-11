@@ -27,9 +27,10 @@ type treeDir struct {
 }
 
 type treeEntry struct {
-	name string
-	blob [20]byte
-	dir  *treeDir
+	name       string
+	blob       [20]byte
+	executable bool
+	dir        *treeDir
 }
 
 func newTreeDir() *treeDir { return &treeDir{entries: map[string]*treeEntry{}} }
@@ -50,8 +51,8 @@ func (d *treeDir) remove(key string) {
 }
 
 // set adds or replaces one file, applying the same path, ID and file/directory
-// conflict rules as Objects.Tree.
-func (t *lineTree) set(path, oid string) error {
+// conflict rules as Objects.Tree. An executable file gets mode 100755.
+func (t *lineTree) set(path, oid string, executable bool) error {
 	if err := Path(path); err != nil {
 		return err
 	}
@@ -80,12 +81,12 @@ func (t *lineTree) set(path, oid string) error {
 		return fmt.Errorf("directory/file conflict")
 	}
 	if e := d.entries[base]; e != nil {
-		if e.blob == raw {
+		if e.blob == raw && e.executable == executable {
 			return nil
 		}
-		e.blob = raw
+		e.blob, e.executable = raw, executable
 	} else {
-		d.insert(base, &treeEntry{name: base, blob: raw})
+		d.insert(base, &treeEntry{name: base, blob: raw, executable: executable})
 	}
 	for _, dir := range trail {
 		dir.oid = ""
@@ -141,6 +142,11 @@ func (t *lineTree) emit(d *treeDir) string {
 			b = append(b, e.name...)
 			b = append(b, 0)
 			b = append(b, e.dir.raw[:]...)
+		} else if e.executable {
+			b = append(b, "100755 "...)
+			b = append(b, e.name...)
+			b = append(b, 0)
+			b = append(b, e.blob[:]...)
 		} else {
 			b = append(b, "100644 "...)
 			b = append(b, e.name...)

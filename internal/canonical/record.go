@@ -42,6 +42,12 @@ type Policy struct {
 	// store. Empty projects every branch under refs/heads/cvs/. Like the rest
 	// of the policy it is fixed at init.
 	Branches map[string]string `json:",omitempty"`
+	// Executable gives files whose CVS archive is executable Git mode 100755.
+	// CVS keeps that bit on the archive, so it applies to every revision, and
+	// a later chmod of the archive changes them all. Without it every file is
+	// 100644. Only format 3 supports it; like the rest of the policy it is
+	// fixed at init.
+	Executable bool `json:",omitempty"`
 }
 
 // Version returns the destination format number this policy encodes.
@@ -86,6 +92,9 @@ func (p Policy) Validate() error {
 	if len(p.Authors) > 0 && p.Version() != 3 {
 		return fmt.Errorf("author maps require destination format 3")
 	}
+	if p.Executable && p.Version() != 3 {
+		return fmt.Errorf("executable file modes require destination format 3")
+	}
 	for name, identity := range p.Authors {
 		if len(name) == 0 || len(name) > MaxAuthor {
 			return fmt.Errorf("author map usernames must contain 1..%d bytes", MaxAuthor)
@@ -120,14 +129,19 @@ func (p Policy) Validate() error {
 }
 
 // Format 2 bytes are unchanged from before format 3 existed. Format 3 names
-// its author profile and version, and appends the sorted author map.
+// its author profile and version, and appends the sorted author map. The file
+// mode profile is fixed 100644 unless executable archives keep their bit.
 func (p Policy) Bytes() []byte {
 	author, version := "hex-author-v2", "2"
 	if p.Version() == 3 {
 		author, version = "mapped-author-readable-initial-v3", "3"
 	}
+	mode := "100644"
+	if p.Executable {
+		mode = "archive-executable-100755-v1"
+	}
 	var b []byte
-	for _, s := range []string{p.Source, p.Module, p.Submodules, "gnu-cvs-rlog-v2", "attic-strip-v2", "identical-membership-alias-v2", author, "100644", "kb", "cvs-exp-dead-absent-v2", version, "sha1", p.Verify} {
+	for _, s := range []string{p.Source, p.Module, p.Submodules, "gnu-cvs-rlog-v2", "attic-strip-v2", "identical-membership-alias-v2", author, mode, "kb", "cvs-exp-dead-absent-v2", version, "sha1", p.Verify} {
 		b = append(b, frame(s)...)
 	}
 	b = append(b, U(uint64(len(p.Mappings)))...)
@@ -242,7 +256,10 @@ type Record struct {
 	State   string
 	Parent  *Key
 	Present bool
-	Content []byte
+	// Executable marks present content whose CVS archive is executable. It
+	// is only set under a policy that keeps executable file modes.
+	Executable bool `json:",omitempty"`
+	Content    []byte
 }
 
 func (r Record) Bytes() []byte { return append(r.prefix(), r.Content...) }
@@ -262,8 +279,12 @@ func (r Record) prefix() []byte {
 		a = append(U(1), r.Parent.Bytes()...)
 	}
 	b = append(b, B(a)...)
+	// An executable file is a third presence value, so records without the
+	// bit keep the bytes and fingerprints they had before modes existed.
 	presence := "absent"
-	if r.Present {
+	if r.Present && r.Executable {
+		presence = "present-executable"
+	} else if r.Present {
 		presence = "present"
 	}
 	b = append(b, frame(presence)...)
@@ -353,6 +374,9 @@ func (in Inventory) Normalize(p Policy) (Inventory, error) {
 		}
 		if (r.State != "live" && r.State != "dead") || (!r.Present && (r.State == "live" || len(r.Content) != 0)) {
 			return Inventory{}, fmt.Errorf("invalid state/content presence")
+		}
+		if r.Executable && (!r.Present || !p.Executable) {
+			return Inventory{}, fmt.Errorf("executable mode without present content or outside policy")
 		}
 		if _, ok := keys[r.Key.ID()]; ok {
 			return Inventory{}, fmt.Errorf("duplicate revision key")

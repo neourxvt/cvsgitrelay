@@ -42,14 +42,22 @@ func ValidOID(s string) bool {
 	return e == nil && len(b) == 20 && hex.EncodeToString(b) == s
 }
 
-// Tree emits the raw recursive Git representation. Directory names sort with
-// a virtual slash, rather than the NUL used to terminate their encoded names.
+// Tree emits the raw recursive Git representation with mode 100644 files.
 func (o Objects) Tree(files map[string]string) (string, error) {
+	return o.TreeModes(files, nil)
+}
+
+// TreeModes is Tree with mode 100755 for the paths that executable marks.
+// Directory names sort with a virtual slash, rather than the NUL used to
+// terminate their encoded names.
+func (o Objects) TreeModes(files map[string]string, executable map[string]bool) (string, error) {
 	type node struct {
 		files map[string]string
 		dirs  map[string]*node
+		exec  map[string]bool
 	}
-	root := &node{map[string]string{}, map[string]*node{}}
+	newNode := func() *node { return &node{map[string]string{}, map[string]*node{}, map[string]bool{}} }
+	root := newNode()
 	for path, oid := range files {
 		if err := Path(path); err != nil {
 			return "", err
@@ -64,7 +72,7 @@ func (o Objects) Tree(files map[string]string) (string, error) {
 				return "", fmt.Errorf("file/directory conflict")
 			}
 			if n.dirs[part] == nil {
-				n.dirs[part] = &node{map[string]string{}, map[string]*node{}}
+				n.dirs[part] = newNode()
 			}
 			n = n.dirs[part]
 		}
@@ -73,6 +81,7 @@ func (o Objects) Tree(files map[string]string) (string, error) {
 			return "", fmt.Errorf("directory/file conflict")
 		}
 		n.files[base] = oid
+		n.exec[base] = executable[path]
 	}
 	var emit func(*node) string
 	emit = func(n *node) string {
@@ -87,6 +96,9 @@ func (o Objects) Tree(files map[string]string) (string, error) {
 		var b []byte
 		for _, name := range names {
 			mode := "100644"
+			if n.exec[name] {
+				mode = "100755"
+			}
 			oid := n.files[name]
 			if strings.HasSuffix(name, "/") {
 				mode = "40000"
