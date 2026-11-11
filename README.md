@@ -32,19 +32,56 @@ reader and normalization profile. For a local CVSROOT, sync and verify ignore
 responsible for login and remote-shell credentials.
 
 Every sync scans the complete configured scope twice, verifies every previously
-accepted immutable record, then replays the full canonical graph. Equal final
-source records, symbols and policy produce equal reachable object bytes and the
-same state OID regardless of polling boundaries or discovery order. Newly visible
+accepted immutable record, then builds the next generation. A matching second
+scan is a stability check, not proof of a repository-wide atomic source
+snapshot. A local CVSROOT created by `mirror` is scanned only once: sync and
+verify hold a shared lock on the mirror for the whole read, `mirror` cannot
+update it meanwhile, and a sync started while `mirror` runs fails with a lock
+error.
+
+`destination.history` selects how Git history follows CVS. It is fixed when the
+destination is created.
+
+`"growing"`, the default for new destinations, only ever adds to the published
+history, so every branch and tag ref only fast-forwards and clones and forks of
+the destination never need to rebase or reset:
+
+- Each CVS commit becomes one Git commit on top of its branch. CVS records
+  commits per file; revisions of one line belong to the same commit when they
+  share author, log message and CVS commit ID, or, without a commit ID, are no
+  more than five minutes apart. The message is the CVS log followed by one
+  `CVS: <revision> <archive>` line per revision, `CVS-Dead:` for a removed file,
+  and `CVS-Commitid:` when CVS recorded one.
+- When CVS changes history that is already published, for example through
+  `cvs admin -m` or `-o`, a chmod of an archive, a removed archive or a branch
+  tag added to more files, the published commits stay as they are. A commit
+  `Update files to their current CVS state` on top of each affected branch
+  brings its files to what CVS has now.
+- A deleted CVS branch or tag keeps its last Git ref. A tag moved to other
+  revisions keeps its first ref, and the new selection is published as
+  `<tag>@2`, `<tag>@3` and so on, with the message `CVS tag <name>, version <n>`.
+- A branch name that moves to another CVS branch continues on its Git branch
+  with a merge commit `CVS branch <name> continues here`.
+- The push to `destination.remote` is never forced.
+
+Two growing destinations of the same source can differ, since each depends on
+what the source looked like at every sync. `verify` checks that the source
+still produces exactly the published state and rehashes every object reachable
+from it.
+
+`"canonical"` makes Git history a function of the current CVS source alone, with
+one event commit per CVS file revision as described below. Equal final source
+records, symbols and policy produce equal reachable object bytes and the same
+state OID regardless of polling boundaries or discovery order. Newly visible
 older revisions, branch membership changes, moved tags and deleted symbols may
 rewrite project history, and so may revisions changed or removed by a CVS
 administrator, whose replaced history is kept under
-`refs/cvsgitrelay/superseded/` (see [docs/RECOVERY.md](docs/RECOVERY.md)). A matching second scan is a stability check, not proof
-of a repository-wide atomic source snapshot. A local CVSROOT created by `mirror`
-is scanned only once: sync and verify hold a shared lock on the mirror for the
-whole read, `mirror` cannot update it meanwhile, and a sync started while
-`mirror` runs fails with a lock error.
+`refs/cvsgitrelay/superseded/` (see [docs/RECOVERY.md](docs/RECOVERY.md)). The
+push to the remote is forced to follow these rewrites.
 
-One designated event commit preserves each CVS revision, including dead and
+Destinations created before the history models existed are canonical.
+
+In canonical history, one designated event commit preserves each CVS revision, including dead and
 unchanged-tree revisions. Trees use exact binary content. A file whose CVS
 archive is executable has mode 100755, every other file 100644. CVS keeps that
 bit on the RCS archive rather than per revision, so it applies to all revisions
@@ -188,9 +225,12 @@ store, because the locks, journal and ref updates above need a local filesystem
 repository. After a successful sync, and after any scheduled maintenance, the
 relay pushes all branches, tags and `refs/cvsgitrelay/*` to the remote
 (including `superseded/` generations; the publication journal and local
-backups stay local). The push is atomic and forced, so the remote always shows
-one generation, follows history rewrites, and loses refs that the local
-generation no longer has. Use a dedicated repository that nothing else writes
+backups stay local). The push is atomic and loses refs that the local
+generation does not have. For growing history it is never forced: a remote
+branch that something else moved elsewhere rejects the whole push, nothing is
+updated, and syncs keep failing to push until the branch is back. For
+canonical history it is forced, so the remote always shows one generation and
+follows history rewrites. Use a dedicated repository that nothing else writes
 to. Authentication is either SSH, for example a GitHub deploy key with write
 access in the `~/.ssh` of the account that runs the sync (`/var/lib/cvsgitrelay/.ssh`
 for the pyinfra deploy), or an access token for an `https://` remote. The token
@@ -257,7 +297,7 @@ unsupported. Git object/reference fsync is enabled; process-crash tests do not
 establish power-loss durability for arbitrary storage.
 
 [The v2 format contract](doc-format-v2.md) specifies exact bytes, profile limits,
-source normalization and executable goldens. Run `go test ./...` for the format,
+source normalization and executable goldens. Run `go test -timeout 30m ./...` for the format,
 source, convergence, GC, locking and recovery checks. Full replay retains the whole
 normalized inventory and generated objects in memory; it has no changed-revisions-only
 performance claim. Summaries report archive bytes/reads, newly written Git objects

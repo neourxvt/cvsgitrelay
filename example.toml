@@ -46,7 +46,8 @@ module = "{name}"
 # These are CVS module inclusions, not Git submodule links or separate mirrors.
 # Ordinary nested source directories remain part of the main module.
 # The policy is pinned at initialization. A different selection requires a new
-# destination. Supported source evolution can rewrite canonical Git history.
+# destination. With canonical history (see destination.history), supported
+# source evolution can rewrite Git history.
 # CLI override: --submodules
 submodules = "exclude"
 
@@ -67,12 +68,35 @@ require_consecutive_revisions = false
 # CLI override: --repo (needs exactly one selected repository)
 # repo = "./git-{name}-v3"
 
+# How Git history follows CVS:
+# "growing" (default for new destinations): history only ever grows. Each CVS
+#   commit becomes one Git commit on top of its branch: the revisions with the
+#   same author, log message and CVS commit ID, or, without a commit ID, within
+#   five minutes of each other. When CVS changes history that is already
+#   published (cvs admin, a changed file mode, a removed archive, ...), a
+#   commit "Update files to their current CVS state" brings the branch to the
+#   files CVS has now; the published commits stay as they are. A deleted CVS branch or tag keeps
+#   its last Git ref, and a CVS tag moved to other revisions is published
+#   again as <tag>@2, <tag>@3, ... next to the first one. Branches, tags and
+#   the remote below therefore only ever fast-forward, so clones and forks
+#   never need to rebase or reset.
+# "canonical": Git history is a function of the current CVS source alone, one
+#   commit per file revision. Two destinations of the same source are
+#   identical, but accepted history changes rewrite the affected branches and
+#   tags (see sync.accept_history_changes), and the remote is force-pushed.
+# The model is fixed when the destination is created; a change requires a
+# fresh destination. Leave it out to keep the model of an existing destination.
+# history = "growing"
+
 # Optional Git URL, such as a GitHub repository, that every sync pushes the
 # published generation to. The local repo above stays the working store, since
 # its locks, journal and ref updates cannot work against a hosted remote. The
 # remote receives all branches, tags and refs/cvsgitrelay/* (except local
-# bookkeeping), is forced to match the local generation and loses refs the
-# local one no longer has, so give it a dedicated, otherwise empty repository.
+# bookkeeping) and loses refs the local generation does not have, so give it a
+# dedicated, otherwise empty repository. With growing history the push never
+# forces: a remote branch that someone moved elsewhere rejects the whole push
+# (nothing is updated) until it is back. With canonical history the remote is
+# forced to match the local generation.
 # Authenticate either with an SSH key or agent (for example a GitHub deploy key
 # with write access) or, for an https:// remote, with remote_secret below. URLs
 # with an embedded password or token are rejected. A failed push fails the sync
@@ -115,12 +139,13 @@ connections = 1
 
 # What sync does when revisions it already published were changed or removed
 # in CVS, as by cvs admin -m or -o or a deleted archive:
-# true (default): publish the source as it is now, rewriting the affected
-#   branches, and keep the replaced history under
-#   refs/cvsgitrelay/superseded/<UTC time>-<state>, which GC never deletes.
-#   A warning lists the changed and removed revisions. A change touching more
-#   than half of the published revisions looks like a damaged source and still
-#   fails with SOURCE_MUTATED or SOURCE_MISSING.
+# true (default): publish the source as it is now. Growing history adds
+#   correction commits on top of the affected branches and keeps everything
+#   published. Canonical history rewrites the affected branches and keeps the
+#   replaced history under refs/cvsgitrelay/superseded/<UTC time>-<state>,
+#   which GC never deletes. A warning lists the changed and removed revisions.
+#   A change touching more than half of the published revisions looks like a
+#   damaged source and still fails with SOURCE_MUTATED or SOURCE_MISSING.
 # false: fail with SOURCE_MUTATED or SOURCE_MISSING until the source is back.
 # CLI override: --accept-history-changes[=false]
 accept_history_changes = true

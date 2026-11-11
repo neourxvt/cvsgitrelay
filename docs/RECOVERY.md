@@ -65,17 +65,27 @@ for good or a timeout too short for the source; the logged failure names it.
 
 A CVS administrator can change published history: `cvs admin -m` changes a
 log message, `cvs admin -o` deletes revisions, and deleting an archive on the
-server removes a whole file. By default sync accepts this and rewrites the
-affected branches, as it does for a moved tag. Before publishing, it keeps the
-replaced generation under `refs/cvsgitrelay/superseded/<UTC time>-<state>`
-and logs a warning that lists the changed and removed revisions; the summary
-counts them as `history_changed` and `history_removed`. The relay never moves
-or deletes these refs, so GC keeps that history; delete them once they are not
-needed. A change that touches more than half of the published revisions looks
-like a damaged or misconfigured source and still fails (exit 5). If the
-source returns to its earlier state, sync publishes exactly the earlier
-generation again. Set `sync.accept_history_changes = false` to fail on every
-such change instead.
+server removes a whole file. By default sync accepts this and logs a warning
+that lists the changed and removed revisions; the summary counts them as
+`history_changed` and `history_removed`. A change that touches more than half
+of the published revisions looks like a damaged or misconfigured source and
+still fails (exit 5). Set `sync.accept_history_changes = false` to fail on
+every such change instead.
+
+With growing history (`destination.history = "growing"`, the default for new
+destinations) the published commits stay. Sync adds a commit `Update files to
+their current CVS state` on top of each affected branch, which the summary
+counts as `corrections`, and records removed revisions in the state so that
+later syncs do not report them again. Nothing is superseded, and a source that
+returns to its earlier state gets another correction rather than the earlier
+generation.
+
+With canonical history sync rewrites the affected branches, as it does for a
+moved tag. Before publishing, it keeps the replaced generation under
+`refs/cvsgitrelay/superseded/<UTC time>-<state>`. The relay never moves or
+deletes these refs, so GC keeps that history; delete them once they are not
+needed. If the source returns to its earlier state, sync publishes exactly the
+earlier generation again.
 
 With `verify.mode = "trust-append-only"`, the default for new destinations, a
 sync reads only new revisions, so contents changed directly in the RCS

@@ -50,6 +50,39 @@ process can leave its own lock files; never remove Git locks while a writer
 could still be alive. Ref corruption or unexplained locks cause a visible
 failure rather than an automatic forced repair.
 
+## Growing history
+
+Canonical history is a pure function of the source, which makes verification a
+byte-identical rebuild but rewrites published branches whenever CVS history
+changes, and forks of a published repository then need to rebase or reset.
+Growing history instead takes the published generation as a second input and
+only appends to it.
+
+- Published commits never change. A build of an unchanged source returns the
+  published state itself, so verify still compares a rebuild with the state
+  and additionally rehashes every object reachable from it.
+- New revisions become changeset commits on top of their line. Grouping runs
+  in the same deterministic order as canonical events: a revision joins the
+  latest changeset of its author, log and commit ID unless that already has
+  its file, holds its parent, or, without a commit ID, is more than five
+  minutes away. The commit message is parsed back strictly on every reopen.
+- Each line has a target tree: per file, its newest revision, or else the
+  revision it forks from. When the line's tip differs from it after appending,
+  a correction commit by the relay identity closes the gap. That covers
+  changed, removed and newly visible older revisions, mode changes and
+  changed branch membership without one special case each.
+- The manifest keeps what the source alone no longer tells: the line each file
+  line was published on, the line each branch ref is bound to, removed
+  revisions and the versions of every tag with a digest of the revisions it
+  selected. A branch name bound to another line continues with a merge commit.
+  A tag whose selection changes gets a new ref `<tag>@<n>`; deleted branches
+  and tags keep their refs.
+- The state commit has the previous state as an extra parent, so the state ref
+  fast-forwards as well. Publication checks that every published ref survives
+  and only fast-forwards before it touches any ref, and the remote push uses
+  no forced refspec, so a defect in the builder cannot rewrite published
+  history.
+
 ## Branch checkout policy
 
 Each file's symbolic branch mapping determines membership and forkpoints.
