@@ -249,8 +249,9 @@ func validateConfig(c Config) error {
 
 // Init reserves only an empty dedicated destination. Initialization stores the
 // selected policy but does not publish a generation before a full source scan.
-// New destinations use format 3; authors is its optional CVS username map and
-// branches the optional selection and renaming of branches.
+// New destinations use format 3 and keep executable file modes; authors is its
+// optional CVS username map and branches the optional selection and renaming
+// of branches.
 func Init(ctx context.Context, runner *process.Runner, path, root, module, source, submodules, verification string, authors, branches map[string]string) error {
 	r := &Repository{Config: Config{Version: 3, SourceID: source, CVSRoot: root, Module: module}, Runner: runner, Submodules: submodules}
 	if _, err := sourceDirectory(root); err != nil {
@@ -268,7 +269,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module, sourc
 		return err
 	}
 
-	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors, Branches: branches}
+	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors, Branches: branches, Executable: true}
 	for _, m := range layout {
 		policy.Mappings = append(policy.Mappings, canonical.Mapping{Archive: m.Source, Checkout: m.Destination})
 	}

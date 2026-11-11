@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"syscall"
 
 	"cvsgitrelay/internal/canonical"
@@ -70,6 +71,19 @@ func (r *Repository) readSharedSourceScope(ctx context.Context, connections int,
 		}
 		in.Records[i].Content = data
 		share(&in.Records[i])
+	}
+	// Reused records already carry their authenticated executable flag.
+	reused := make(map[int]bool, len(in.Records))
+	for i := range in.Records {
+		reused[i] = in.Records[i].Present
+	}
+	for _, i := range positions {
+		reused[i] = false
+	}
+	checkouts, err := r.applyModes(ctx, &in, listed, reused, connections)
+	stats.Requests += checkouts
+	if err != nil {
+		return in, stats, err
 	}
 	in, err = in.Normalize(r.Config.Policy)
 	if err != nil {
@@ -253,8 +267,88 @@ func (r *Repository) reuseTrustedContent(current *canonical.Record) bool {
 	if decodeJSON(data, &cached) != nil || cached.Key != current.Key || cached.Present != current.Present || cached.Fingerprint() != old.Fingerprint {
 		return false
 	}
-	current.Content = cached.Content
+	// The fingerprint covers the executable flag as well, so it is reused
+	// on the same authority as the content.
+	current.Content, current.Executable = cached.Content, cached.Executable
 	return true
+}
+
+// applyModes sets the executable flag of every present record under a policy
+// that keeps executable file modes, and returns the number of CVS checkouts it
+// ran. The flag belongs to the archive, so all its records get the same one.
+//
+// An archive whose present records all came from the trusted content cache
+// keeps their authenticated flag. Otherwise its mode is observed: through a
+// checkout of every root plus one historical probe per file outside them when
+// nothing was reused (full verification, a scheduled content check or a lost
+// cache), and through one probe per remaining archive otherwise. The probe
+// target is the archive's newest live revision, which is new in exactly those
+// archives, so no separate mode cache could serve them.
+func (r *Repository) applyModes(ctx context.Context, in *canonical.Inventory, listed *Inventory, reused map[int]bool, connections int) (int, error) {
+	if !r.Config.Policy.Executable {
+		return 0, nil
+	}
+	observe := map[string]bool{}
+	anyReused := false
+	for i, record := range in.Records {
+		if !record.Present {
+			continue
+		}
+		if reused[i] {
+			anyReused = true
+		} else {
+			observe[record.Key.Archive] = true
+		}
+	}
+	if len(observe) == 0 {
+		return 0, nil
+	}
+	selected := &Inventory{Files: map[string]*File{}}
+	var roots []string
+	if anyReused {
+		for path, file := range listed.Files {
+			if observe[file.SourcePath] {
+				selected.Files[path] = file
+			}
+		}
+	} else {
+		selected = listed
+		for _, mapping := range listed.Layout {
+			if !slices.Contains(roots, mapping.Source) {
+				roots = append(roots, mapping.Source)
+			}
+		}
+		slices.Sort(roots)
+	}
+	work, err := os.MkdirTemp(r.Path, "cvsgitrelay-modes-")
+	if err != nil {
+		return 0, err
+	}
+	defer os.RemoveAll(work)
+	r.Runner.Log.Debug("Observing CVS file permissions", "archives", len(observe), "roots", len(roots))
+	modes, checkouts, err := r.observeModes(ctx, selected, modeObservation{
+		Roots:       roots,
+		RootStage:   "Observing CVS file permissions",
+		WorkDir:     work,
+		Refresh:     true,
+		Connections: max(1, connections),
+	})
+	if err != nil {
+		return checkouts, diag.New(diag.Code(err), "cvs.modes", "CVS file permissions could not be observed", err)
+	}
+	for i := range in.Records {
+		record := &in.Records[i]
+		if !record.Present || !observe[record.Key.Archive] {
+			continue
+		}
+		mode, known := modes[record.Key.Archive]
+		if !known {
+			return checkouts, diag.New("source", "cvs.modes", "CVS exposes no file mode for a live revision", nil, "archive_hex", hexBytes(record.Key.Archive))
+		}
+		// Git keeps only the owner's execute bit.
+		record.Executable = mode&0100 != 0
+	}
+	return checkouts, nil
 }
 
 func (r *Repository) cacheAccepted(in canonical.Inventory) error {

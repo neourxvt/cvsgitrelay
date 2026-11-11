@@ -106,30 +106,44 @@ type modeObservation struct {
 	// WorkDir receives one temporary directory per checkout. The caller decides
 	// when to remove them.
 	WorkDir string
-	// ProbeCache is the file that keeps historical probe results between runs;
-	// Refresh ignores its contents. It is always rewritten with the results.
+	// ProbeCache, when set, is the file that keeps the observed mode of every
+	// inventory file with a live revision between runs; Refresh ignores its
+	// contents. It is always rewritten with the results.
 	ProbeCache string
 	Refresh    bool
 	// Connections limits concurrent historical probes.
 	Connections int
-	Progress    *mirrorProgress
+	// Progress, when set, reports the observation phases; otherwise they are
+	// only logged at debug level.
+	Progress *mirrorProgress
 	// Visit, when set, sees every directory and regular file of a root
 	// checkout (CVS administrative directories excluded) by physical path.
 	Visit func(root, physical, path string, info fs.FileInfo) error
 }
 
-// observeModes returns the permission bits of every inventory file whose mode
-// CVS exposes: those in a root checkout, then those reachable through one
-// checkout of their newest live revision. Files with no live revision, or
-// whose probe yields no file, are absent from the result.
-func (r *Repository) observeModes(ctx context.Context, inventory *Inventory, o modeObservation) (map[string]fs.FileMode, error) {
+func (o modeObservation) stage(log func(string, ...any), message string, fields ...any) {
+	if o.Progress != nil {
+		o.Progress.stage(message, fields...)
+	} else {
+		log(message, fields...)
+	}
+}
+
+// observeModes returns the permission bits by physical path of every inventory
+// file whose mode CVS exposes: those in a root checkout, then those reachable
+// through one checkout of their newest live revision. Files with no live
+// revision, or whose probe yields no file, are absent from the result. It also
+// returns the number of CVS checkouts it ran.
+func (r *Repository) observeModes(ctx context.Context, inventory *Inventory, o modeObservation) (map[string]fs.FileMode, int, error) {
 	modes := map[string]fs.FileMode{}
+	checkouts := 0
 	for _, source := range o.Roots {
-		o.Progress.stage(o.RootStage, "path", source)
+		o.stage(r.Runner.Log.Debug, o.RootStage, "path", source)
 		workspace, err := os.MkdirTemp(o.WorkDir, "work-tree-")
 		if err != nil {
-			return nil, err
+			return nil, checkouts, err
 		}
+		checkouts++
 		err = r.checkoutObservation(ctx, workspace, source+"/", "")
 		if err == nil {
 			err = filepath.WalkDir(filepath.Join(workspace, "tree"), func(path string, entry fs.DirEntry, walkErr error) error {
@@ -164,24 +178,31 @@ func (r *Repository) observeModes(ctx context.Context, inventory *Inventory, o m
 			})
 		}
 		if err != nil {
-			return nil, err
+			return nil, checkouts, err
 		}
 	}
 	// Files absent from a default checkout can still expose mode through an older
 	// live revision or a branch. No content is fabricated for that metadata probe.
 	// The probes are independent checkouts and share the connection limit.
 	cached := map[string]modeProbe{}
-	if !o.Refresh {
+	if !o.Refresh && o.ProbeCache != "" {
 		cached = r.loadModeProbes(o.ProbeCache)
 	}
 	var probes []*Revision
 	var results []modeProbe
+	reused := 0
+	// Probe targets map back to their file, as inventories differ in their
+	// keys: physical paths for the mirror, checkout paths for the Git sync.
+	targets := map[*Revision]*File{}
 	for _, file := range inventory.Files {
-		if _, known := modes[file.SourcePath]; known {
-			continue
-		}
 		live := historicalProbeTarget(file)
 		if live == nil {
+			continue
+		}
+		// The archive mode applies to every revision, so a root checkout
+		// result is cached under the same target as a historical probe.
+		if mode, known := modes[file.SourcePath]; known {
+			results = append(results, modeProbe{Source: []byte(file.SourcePath), Revision: live.Number, Attic: file.InAttic, Mode: uint32(mode), Available: true})
 			continue
 		}
 		if probe, ok := reusableModeProbe(cached, file, live); ok {
@@ -189,15 +210,17 @@ func (r *Repository) observeModes(ctx context.Context, inventory *Inventory, o m
 				modes[file.SourcePath] = fs.FileMode(probe.Mode)
 			}
 			results = append(results, probe)
+			reused++
 			continue
 		}
 		probes = append(probes, live)
+		targets[live] = file
 	}
 	slices.SortFunc(probes, func(a, b *Revision) int { return strings.Compare(a.SourcePath, b.SourcePath) })
-	r.Runner.Log.Info("Historical CVS file permissions planned", "probes", len(probes), "reused", len(results), "refresh", o.Refresh)
+	r.Runner.Log.Info("Historical CVS file permissions planned", "probes", len(probes), "reused", reused, "refresh", o.Refresh)
 	if len(probes) > 0 {
 		// Start this phase once so its clock covers every historical probe.
-		o.Progress.stage("Observing historical CVS file permissions", "files", len(probes))
+		o.stage(r.Runner.Log.Debug, "Observing historical CVS file permissions", "files", len(probes))
 	}
 	type observed struct {
 		mode  fs.FileMode
@@ -235,18 +258,24 @@ func (r *Repository) observeModes(ctx context.Context, inventory *Inventory, o m
 	defer fetched.close()
 	for _, live := range probes {
 		probe, err := fetched.next()
+		checkouts++
 		if err != nil {
-			return nil, err
+			return nil, checkouts, err
 		}
-		o.Progress.update("path", live.SourcePath, "revision", live.Number)
+		if o.Progress != nil {
+			o.Progress.update("path", live.SourcePath, "revision", live.Number)
+		}
 		if probe.known {
 			modes[live.SourcePath] = probe.mode
 		}
-		file := inventory.Files[live.SourcePath]
+		file := targets[live]
 		results = append(results, modeProbe{Source: []byte(live.SourcePath), Revision: live.Number, Attic: file.InAttic, Mode: uint32(probe.mode), Available: probe.known})
 	}
-	if err := saveModeProbes(o.ProbeCache, results); err != nil {
-		return nil, err
+	if o.ProbeCache == "" {
+		return modes, checkouts, nil
 	}
-	return modes, nil
+	if err := saveModeProbes(o.ProbeCache, results); err != nil {
+		return nil, checkouts, err
+	}
+	return modes, checkouts, nil
 }

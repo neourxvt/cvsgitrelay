@@ -42,7 +42,7 @@ func (m *cvsMirror) observeTree(ctx context.Context, inventory *Inventory, conne
 	for _, source := range roots {
 		directorySet[source] = true
 	}
-	modes, err := m.source.observeModes(ctx, inventory, modeObservation{
+	modes, _, err := m.source.observeModes(ctx, inventory, modeObservation{
 		Roots:       roots,
 		RootStage:   "Observing CVS permissions and directories",
 		WorkDir:     m.state,
