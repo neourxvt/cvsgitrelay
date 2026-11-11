@@ -13,6 +13,9 @@ cp example.toml mirror.toml
 ./cvsgitrelay verify mirror.toml
 ```
 
+`./dev.py` wraps the development commands (`build`, `test`, `fmt`, `vet`, `lint`,
+`check`, `run`, `clean`) and works from any directory; see `./dev.py --help`.
+
 [example.toml](example.toml) documents settings and CLI overrides. A TOML path
 is required. Relative destinations belong to its directory. Explicit `--repo`
 overrides are relative to the caller. An operator-assigned `source.source_id`
