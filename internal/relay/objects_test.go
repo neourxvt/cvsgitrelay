@@ -125,7 +125,7 @@ func TestFormat3EventsVerify(t *testing.T) {
 	if _, err := v2.readState(ctx, g.State); err == nil {
 		t.Fatal("format 2 verifier accepted format 3 events")
 	}
-	tip := g.Manifest.Refs[trunkRef]
+	tip := g.Manifest.Refs[r.Config.Policy.HeadRef()]
 	out, err := r.git(ctx, nil, nil, "log", "--reverse", "--format=%an <%ae>|%s", tip)
 	if err != nil {
 		t.Fatal(diag.Details(err, false))

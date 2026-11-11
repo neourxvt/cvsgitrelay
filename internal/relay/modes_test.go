@@ -2,7 +2,6 @@ package relay
 
 import (
 	"context"
-	"encoding/hex"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -118,7 +117,7 @@ func TestSyncKeepsExecutableModes(t *testing.T) {
 	if _, err := r.Sync(ctx, Options{}); err != nil {
 		t.Fatal(diag.Details(err, false))
 	}
-	branch := "refs/heads/cvs/b" + hex.EncodeToString([]byte("feature"))
+	branch := "refs/heads/feature"
 	for _, c := range []struct{ rev, path, mode string }{
 		{trunkRef, "active", "100755"}, {trunkRef, "binary file", "100644"},
 		{branch, "active", "100755"}, {branch, "branch-only", "100755"},

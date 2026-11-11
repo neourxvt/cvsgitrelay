@@ -18,7 +18,8 @@ import (
 	"cvsgitrelay/internal/process"
 )
 
-const trunkRef = "refs/heads/cvs/trunk"
+// trunkRef is the trunk of destinations with readable branch names.
+const trunkRef = "refs/heads/trunk"
 const stateRef = "refs/cvsgitrelay/state"
 const journalRef = "refs/cvsgitrelay/ops/publish"
 const zeroOID = "0000000000000000000000000000000000000000"
@@ -226,9 +227,9 @@ func decodeJSON(data []byte, dst any) error {
 }
 
 // ownedRef reports whether the exporter owns a ref: its reserved namespaces
-// and the Git branches named by the policy's branch map.
+// and the branch projections of the policy.
 func (r *Repository) ownedRef(ref string) bool {
-	return strings.HasPrefix(ref, "refs/heads/cvs/") || r.Config.Policy.IsTagRef(ref) || strings.HasPrefix(ref, "refs/cvsgitrelay/") || r.Config.Policy.MappedBranchRef(ref)
+	return strings.HasPrefix(ref, "refs/heads/cvs/") || r.Config.Policy.IsTagRef(ref) || strings.HasPrefix(ref, "refs/cvsgitrelay/") || r.Config.Policy.IsBranchRef(ref)
 }
 
 // Format 2 destinations keep their hex revision events; new destinations use
@@ -249,9 +250,9 @@ func validateConfig(c Config) error {
 
 // Init reserves only an empty dedicated destination. Initialization stores the
 // selected policy but does not publish a generation before a full source scan.
-// New destinations use format 3 and keep executable file modes; authors is its
-// optional CVS username map and branches the optional selection and renaming
-// of branches.
+// New destinations use format 3, keep executable file modes and name branches
+// readably unless a branch map names them; authors is its optional CVS
+// username map and branches the optional selection and renaming of branches.
 func Init(ctx context.Context, runner *process.Runner, path, root, module, source, submodules, verification string, authors, branches map[string]string) error {
 	r := &Repository{Config: Config{Version: 3, SourceID: source, CVSRoot: root, Module: module}, Runner: runner, Submodules: submodules}
 	if _, err := sourceDirectory(root); err != nil {
@@ -269,7 +270,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module, sourc
 		return err
 	}
 
-	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors, Branches: branches, Executable: true}
+	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors, Branches: branches, Executable: true, ReadableBranches: len(branches) == 0}
 	for _, m := range layout {
 		policy.Mappings = append(policy.Mappings, canonical.Mapping{Archive: m.Source, Checkout: m.Destination})
 	}
