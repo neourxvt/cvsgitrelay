@@ -152,17 +152,27 @@ a lost state ref.
 
 Branches and tags are eventually reconciled projections:
 
-- `refs/heads/cvs/trunk`
-- `refs/heads/cvs/b<hex raw branch name>` for every named branch alias
+- `refs/heads/trunk`
+- `refs/heads/<branch name>` for every named branch alias, or
+  `refs/heads/cvs-raw/<hex raw branch name>` when the name is not a safe ref
+  name or is one of the reserved names `trunk`, `HEAD` and `cvs-raw`
+  (destinations initialized before readable branch names, and format 2:
+  `refs/heads/cvs/trunk` and `refs/heads/cvs/b<hex raw branch name>`)
 - `refs/tags/<tag name>` for exact per-file tag snapshots, or
   `refs/tags/cvs-raw/<hex raw tag name>` when the name is not a safe ref name
   (format 2: `refs/tags/cvs/b<hex raw tag name>`)
 - `refs/cvsgitrelay/lines/b<hex logical line ID>` for every line
 
+A branch ref depends on its CVS name alone, so a new branch never renames an
+existing one. With readable names the relay owns all of `refs/heads/`, as it
+owns all of `refs/tags/`: a branch pushed there by hand is reported as an
+unexpected ref and stops publication.
+
 The optional `[branches]` table selects and renames the branch projections.
 Each entry maps `trunk` or a raw CVS branch name to a Git branch name, for
 example `trunk = "main"` publishes the trunk as `refs/heads/main`. Only listed
-branches get a `refs/heads/<name>` ref and no `refs/heads/cvs/` refs exist.
+branches get a `refs/heads/<name>` ref and the relay owns only those, besides
+`refs/heads/cvs/`.
 Several CVS names that denote the same branch may each be mapped to their own
 Git name. `HEAD` follows the trunk, or the first Git name alphabetically if the
 trunk is not listed. Tags and line refs are unaffected, and the history of an
@@ -234,7 +244,7 @@ git show "$generation:manifest.v2"
 Consumers tracking project branches must explicitly allow non-fast-forward fetches:
 
 ```sh
-git fetch mirror '+refs/heads/cvs/*:refs/remotes/cvs/*' '+refs/tags/*:refs/tags/*'
+git fetch mirror '+refs/heads/*:refs/remotes/cvs/*' '+refs/tags/*:refs/tags/*'
 ```
 
 Publication requires a reliable shared-filesystem writer lock. A separate Git

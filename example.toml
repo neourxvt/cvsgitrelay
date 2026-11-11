@@ -217,7 +217,8 @@ failpoint = ""
 # branches. Keys are "trunk" or a raw CVS branch name (quote names with dots),
 # values are Git branch names that must be distinct and valid for Git. Only the
 # listed branches get a refs/heads/<name> ref and HEAD follows the trunk.
-# Omit the table to publish every branch as refs/heads/cvs/b<hex name>.
+# Omit the table to publish the trunk as refs/heads/trunk and every branch
+# as refs/heads/<name> (refs/heads/cvs-raw/<hex name> for unsafe names).
 # Tags are unaffected. The map is fixed when the destination is initialized;
 # a different map requires a new destination.
 # trunk = "main"
