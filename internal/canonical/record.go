@@ -55,6 +55,12 @@ type Policy struct {
 	// 100644. Only format 3 supports it; like the rest of the policy it is
 	// fixed at init.
 	Executable bool `json:",omitempty"`
+	// Growing keeps published history: a sync only adds commits on top of
+	// what it published before, grouped into changesets, and never rewrites
+	// or deletes a branch or tag. Without it the history is a pure function
+	// of the current source and changed CVS history rewrites it. Only format
+	// 3 supports it; like the rest of the policy it is fixed at init.
+	Growing bool `json:",omitempty"`
 }
 
 // Version returns the destination format number this policy encodes.
@@ -101,6 +107,9 @@ func (p Policy) Validate() error {
 	}
 	if p.Executable && p.Version() != 3 {
 		return fmt.Errorf("executable file modes require destination format 3")
+	}
+	if p.Growing && p.Version() != 3 {
+		return fmt.Errorf("growing history requires destination format 3")
 	}
 	for name, identity := range p.Authors {
 		if len(name) == 0 || len(name) > MaxAuthor {
@@ -181,6 +190,9 @@ func (p Policy) Bytes() []byte {
 	// Like the map, the readable naming joins the policy only when used.
 	if p.ReadableBranches {
 		b = append(b, frame("readable-branch-names-v1")...)
+	}
+	if p.Growing {
+		b = append(b, frame("growing-history-v1")...)
 	}
 	return b
 }
@@ -274,6 +286,12 @@ type Record struct {
 	// is only set under a policy that keeps executable file modes.
 	Executable bool `json:",omitempty"`
 	Content    []byte
+	// CommitID is the CVS commit ID of the revision, which newer CVS versions
+	// give every file of one commit. It only groups revisions into changesets
+	// of growing history and is set only under that policy. It is no part of
+	// the fingerprint: an older CVS client that does not report it must not
+	// make published revisions look changed.
+	CommitID string `json:",omitempty"`
 }
 
 func (r Record) Bytes() []byte { return append(r.prefix(), r.Content...) }
@@ -392,6 +410,9 @@ func (in Inventory) Normalize(p Policy) (Inventory, error) {
 		if r.Executable && (!r.Present || !p.Executable) {
 			return Inventory{}, fmt.Errorf("executable mode without present content or outside policy")
 		}
+		if r.CommitID != "" && (!p.Growing || !validCommitID(r.CommitID)) {
+			return Inventory{}, fmt.Errorf("invalid commit ID or commit ID outside policy")
+		}
 		if _, ok := keys[r.Key.ID()]; ok {
 			return Inventory{}, fmt.Errorf("duplicate revision key")
 		}
@@ -478,5 +499,34 @@ func (in Inventory) Digest(source string) string {
 	for _, s := range in.Symbols {
 		h.Write(B(s.Bytes(source)))
 	}
+	// Commit IDs follow as a section of their own, which only an inventory
+	// that has them writes, so the digests of other inventories are unchanged.
+	var ids []Record
+	for _, r := range in.Records {
+		if r.CommitID != "" {
+			ids = append(ids, r)
+		}
+	}
+	if len(ids) > 0 {
+		h.Write(frame("commit-ids"))
+		h.Write(U(uint64(len(ids))))
+		for _, r := range ids {
+			h.Write(B(r.Key.Bytes()))
+			h.Write(frame(r.CommitID))
+		}
+	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// validCommitID accepts the printable ASCII identifiers CVS writes.
+func validCommitID(id string) bool {
+	if len(id) > 256 {
+		return false
+	}
+	for _, c := range []byte(id) {
+		if c < 33 || c > 126 {
+			return false
+		}
+	}
+	return id != ""
 }

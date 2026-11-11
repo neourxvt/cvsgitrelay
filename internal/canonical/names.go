@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -45,6 +46,33 @@ func (p Policy) IsTagRef(ref string) bool {
 	return strings.HasPrefix(ref, "refs/tags/cvs/")
 }
 
+// TagVersionRef returns the ref of one version of a tag under growing
+// history. CVS moves a tag in place, but a published tag never moves: the
+// first version keeps the tag's own ref and every later one gets that ref
+// plus "@<version>". CVS tag names cannot contain "@", so no tag of the
+// source can have such a ref.
+func (p Policy) TagVersionRef(name string, version int) (string, error) {
+	ref, err := p.TagRef(name)
+	if err != nil || version == 1 {
+		return ref, err
+	}
+	ref += "@" + strconv.Itoa(version)
+	if len(ref) > MaxRef {
+		return "", fmt.Errorf("unsupported ref length")
+	}
+	return ref, nil
+}
+
+// validTagVersionRef accepts exactly the refs of tag versions after the first.
+func validTagVersionRef(ref string) bool {
+	at := strings.LastIndexByte(ref, '@')
+	if at < 0 {
+		return false
+	}
+	v, err := strconv.Atoi(ref[at+1:])
+	return err == nil && v >= 2 && strconv.Itoa(v) == ref[at+1:] && validTagRef(ref[:at]) && len(ref) <= MaxRef
+}
+
 // validTagRef accepts exactly the refs TagRef can produce under format 3.
 func validTagRef(ref string) bool {
 	name, ok := strings.CutPrefix(ref, tagPrefix)
@@ -72,11 +100,15 @@ func (p Policy) tagMessage(name string) string {
 // the first commit of the whole history, so it carries the message Git users
 // expect there.
 func (p Policy) lineMessage(line *projectLine) string {
+	id := line.id
+	if line.label != "" {
+		id = line.label
+	}
 	switch {
-	case line.id == "trunk":
+	case id == "trunk":
 		return "Initial commit\n"
-	case strings.HasPrefix(line.id, "named\x00"):
-		return "CVS branch " + textField(strings.TrimPrefix(line.id, "named\x00")) + "\n"
+	case strings.HasPrefix(id, "named\x00"):
+		return "CVS branch " + textField(strings.TrimPrefix(id, "named\x00")) + "\n"
 	default:
 		f := line.members[0]
 		return "CVS unnamed branch " + f.number + " of " + textField(f.archive) + "\n"

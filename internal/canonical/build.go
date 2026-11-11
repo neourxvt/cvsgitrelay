@@ -13,6 +13,9 @@ type Generation struct {
 	State    string
 	Manifest Manifest
 	Objects  Objects
+	// Corrections counts the commits of growing history that bring a line
+	// to the current source after published history changed in CVS.
+	Corrections int
 }
 type fileLine struct {
 	id, archive, number string
@@ -23,6 +26,10 @@ type projectLine struct {
 	id      string
 	aliases []string
 	members []*fileLine
+	// label names the line in its first commit when its ID differs from the
+	// one the source suggests, as for a branch of growing history that was
+	// deleted in CVS and created again.
+	label string
 }
 
 func fileLineID(archive, line string) string { return string(append(frame(archive), frame(line)...)) }
@@ -39,21 +46,35 @@ func eventCompare(a, b Record) int {
 	return strings.Compare(a.Key.Archive, b.Key.Archive)
 }
 
-// Build always replays the complete normalized state. Nothing in its signature
-// can expose a previously published tip or the number of intermediate syncs.
-func Build(input Inventory, p Policy) (Generation, error) {
+// structure is the normalized source arranged into file lines, and into the
+// project lines that the current branch symbols form from them.
+type structure struct {
+	in      Inventory
+	records map[string]Record
+	flines  map[string]*fileLine
+	// projects are the project lines by ID, and assignment maps every file
+	// line ID to the ID of its project line.
+	projects   map[string]*projectLine
+	assignment map[string]string
+	// blobs maps the ID of every present record to its blob.
+	blobs map[string]string
+}
+
+// analyze normalizes the source, checks the ancestry of every file line and
+// groups the file lines into project lines. It stores a blob of every present
+// revision in objects.
+func analyze(input Inventory, p Policy, objects Objects) (*structure, error) {
 	in, err := input.Normalize(p)
 	if err != nil {
-		return Generation{}, err
+		return nil, err
 	}
 	if _, named := p.Authors[RelayAuthor]; named && p.Version() == 3 {
 		for _, r := range in.Records {
 			if r.Author == RelayAuthor {
-				return Generation{}, fmt.Errorf("the CVS username %q is reserved for the relay identity in the author map", RelayAuthor)
+				return nil, fmt.Errorf("the CVS username %q is reserved for the relay identity in the author map", RelayAuthor)
 			}
 		}
 	}
-	g := Generation{Objects: Objects{}, Manifest: Manifest{Source: p.Source, PolicyDigest: p.Digest(), SourceDigest: in.Digest(p.Source), Verify: p.Verify, Revisions: map[string]RevisionEntry{}, Lines: map[string]string{}, Refs: map[string]string{}}}
 	records := map[string]Record{}
 	flines := map[string]*fileLine{}
 	ensure := func(archive, line string) *fileLine {
@@ -84,7 +105,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		if f.number != "trunk" {
 			r, ok := records[(Key{p.Source, f.archive, Fork(f.number)}).ID()]
 			if !ok {
-				return Generation{}, fmt.Errorf("missing forkpoint")
+				return nil, fmt.Errorf("missing forkpoint")
 			}
 			f.fork = &r
 		}
@@ -98,17 +119,17 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			} else if Line(r.Parent.Number) == f.number {
 				children[r.Parent.ID()]++
 				if children[r.Parent.ID()] > 1 {
-					return Generation{}, fmt.Errorf("fork inside file line")
+					return nil, fmt.Errorf("fork inside file line")
 				}
 			} else {
 				if f.fork == nil || *r.Parent != f.fork.Key {
-					return Generation{}, fmt.Errorf("wrong fork")
+					return nil, fmt.Errorf("wrong fork")
 				}
 				roots++
 			}
 		}
 		if len(f.events) > 0 && roots != 1 {
-			return Generation{}, fmt.Errorf("incomplete file line ancestry")
+			return nil, fmt.Errorf("incomplete file line ancestry")
 		}
 	}
 	projects := map[string]*projectLine{}
@@ -124,7 +145,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		for id := range set {
 			if old := assignment[id]; old != "" {
 				if primary != "" && primary != old {
-					return Generation{}, fmt.Errorf("overlapping branch symbols")
+					return nil, fmt.Errorf("overlapping branch symbols")
 				}
 				primary = old
 			}
@@ -132,11 +153,11 @@ func Build(input Inventory, p Policy) (Generation, error) {
 		if primary != "" {
 			line := projects[primary]
 			if len(line.members) != len(set) {
-				return Generation{}, fmt.Errorf("partial branch alias")
+				return nil, fmt.Errorf("partial branch alias")
 			}
 			for _, f := range line.members {
 				if !set[f.id] {
-					return Generation{}, fmt.Errorf("partial branch alias")
+					return nil, fmt.Errorf("partial branch alias")
 				}
 			}
 			line.aliases = append(line.aliases, name)
@@ -163,15 +184,32 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			assignment[id] = line.id
 		}
 	}
-	events := map[string]string{}
 	blobs := map[string]string{}
 	// Source contents are not modified after normalization, so blobs share them
 	// rather than holding a second copy of every revision body.
 	for _, r := range in.Records {
 		if r.Present {
-			blobs[r.Key.ID()] = g.Objects.putShared("blob", r.Content)
+			blobs[r.Key.ID()] = objects.putShared("blob", r.Content)
 		}
 	}
+	return &structure{in: in, records: records, flines: flines, projects: projects, assignment: assignment, blobs: blobs}, nil
+}
+
+// Build always replays the complete normalized state. Nothing in its signature
+// can expose a previously published tip or the number of intermediate syncs.
+// Growing history starts from nothing here; Grow continues a published one.
+func Build(input Inventory, p Policy) (Generation, error) {
+	if p.Growing {
+		return Grow(input, p, Published{})
+	}
+	g := Generation{Objects: Objects{}}
+	s, err := analyze(input, p, g.Objects)
+	if err != nil {
+		return Generation{}, err
+	}
+	in, records, projects, assignment, blobs := s.in, s.records, s.projects, s.assignment, s.blobs
+	g.Manifest = Manifest{Source: p.Source, PolicyDigest: p.Digest(), SourceDigest: in.Digest(p.Source), Verify: p.Verify, Revisions: map[string]RevisionEntry{}, Lines: map[string]string{}, Refs: map[string]string{}}
+	events := map[string]string{}
 	remaining := SortedKeys(projects)
 	// lineParents records the primary parent line of every built line, which
 	// ranks the candidates of the lines that branch from it.
@@ -321,12 +359,9 @@ func Build(input Inventory, p Policy) (Generation, error) {
 			return Generation{}, fmt.Errorf("cyclic project line dependencies")
 		}
 	}
-	// Snapshot tags select exact revision contents even across different lines.
-	tags := map[string][]Record{}
-	for _, s := range in.Symbols {
-		if !s.Branch {
-			tags[s.Name] = append(tags[s.Name], records[(Key{p.Source, s.Archive, s.Target}).ID()])
-		}
+	tags, err := tagSelections(in, records, p)
+	if err != nil {
+		return Generation{}, err
 	}
 	var tips []string
 	for _, tip := range g.Manifest.Lines {
@@ -334,33 +369,18 @@ func Build(input Inventory, p Policy) (Generation, error) {
 	}
 	for _, name := range SortedKeys(tags) {
 		selected := tags[name]
-		slices.SortFunc(selected, func(a, b Record) int { return strings.Compare(a.Path, b.Path) })
-		b := U(uint64(len(selected)))
-		files := map[string]string{}
-		executable := map[string]bool{}
-		for i, r := range selected {
-			if i > 0 && selected[i-1].Path == r.Path {
-				return Generation{}, fmt.Errorf("duplicate tag path")
-			}
-			pair := append(frame(r.Path), B(r.Key.Bytes())...)
-			b = append(b, B(pair)...)
-			if r.State == "live" {
-				files[r.Path] = blobs[r.Key.ID()]
-				executable[r.Path] = r.Executable
-			}
-		}
-		tree, e := g.Objects.TreeModes(files, executable)
+		tree, selection, e := g.Objects.snapshotTree(selected, blobs)
 		if e != nil {
 			return Generation{}, e
 		}
 		var oid string
 		if p.Version() == 3 {
-			oid, e = g.tagCommitV3(p, name, selected, tree, events)
+			oid, e = g.tagCommitV3(p, p.tagMessage(name), selected, tree, events, nil)
 			if e != nil {
 				return Generation{}, e
 			}
 		} else {
-			message := "cvsgitrelay-tag-v2\nname=" + Hex(name) + "\nselection-sha256=" + Hash("cvsgitrelay-tag-selection-v2", b) + "\n"
+			message := "cvsgitrelay-tag-v2\nname=" + Hex(name) + "\nselection-sha256=" + selection + "\n"
 			oid = g.Objects.SyntheticAs(p.Relay(), tree, nil, message, SyntheticTime)
 		}
 		ref, e := p.TagRef(name)
@@ -456,22 +476,69 @@ func vendorLine(line *projectLine) bool {
 	return true
 }
 
+// tagSelections returns the revisions every tag selects, sorted by path.
+// Snapshot tags select exact revision contents even across different lines.
+func tagSelections(in Inventory, records map[string]Record, p Policy) (map[string][]Record, error) {
+	tags := map[string][]Record{}
+	for _, s := range in.Symbols {
+		if !s.Branch {
+			tags[s.Name] = append(tags[s.Name], records[(Key{p.Source, s.Archive, s.Target}).ID()])
+		}
+	}
+	for _, selected := range tags {
+		slices.SortFunc(selected, func(a, b Record) int { return strings.Compare(a.Path, b.Path) })
+		for i, r := range selected {
+			if i > 0 && selected[i-1].Path == r.Path {
+				return nil, fmt.Errorf("duplicate tag path")
+			}
+		}
+	}
+	return tags, nil
+}
+
+// snapshotTree stores the tree of the revisions a tag selects and returns it
+// with the digest of the selection, which names the revisions but not their
+// contents.
+func (o Objects) snapshotTree(selected []Record, blobs map[string]string) (tree, selection string, err error) {
+	b := U(uint64(len(selected)))
+	files := map[string]string{}
+	executable := map[string]bool{}
+	for _, r := range selected {
+		pair := append(frame(r.Path), B(r.Key.Bytes())...)
+		b = append(b, B(pair)...)
+		if r.State == "live" {
+			files[r.Path] = blobs[r.Key.ID()]
+			executable[r.Path] = r.Executable
+		}
+	}
+	tree, err = o.TreeModes(files, executable)
+	return tree, Hash("cvsgitrelay-tag-selection-v2", b), err
+}
+
 // tagCommitV3 attaches a format 3 tag snapshot to the history it was taken
 // from. The base is the event commit of the newest selected revision, the
 // one that also dates the tag. If the tree there already equals the snapshot,
 // the tag names that event commit itself. Otherwise a synthetic commit on top
 // of it records the exact selection, so the tag still has the event history
-// as its ancestry instead of being a parentless root.
-func (g Generation) tagCommitV3(p Policy, name string, selected []Record, tree string, events map[string]string) (string, error) {
+// as its ancestry instead of being a parentless root. A base that this
+// generation did not create is looked up in published.
+func (g Generation) tagCommitV3(p Policy, message string, selected []Record, tree string, events map[string]string, published Objects) (string, error) {
 	newest := slices.MaxFunc(selected, eventCompare)
 	base := events[newest.Key.ID()]
 	if base == "" {
 		return "", fmt.Errorf("unresolved tag base")
 	}
-	if commitTree(g.Objects[base].Data) == tree {
+	commit, ok := g.Objects[base]
+	if !ok {
+		commit, ok = published[base]
+	}
+	if !ok || commit.Kind != "commit" {
+		return "", fmt.Errorf("unavailable tag base")
+	}
+	if commitTree(commit.Data) == tree {
 		return base, nil
 	}
-	return g.Objects.SyntheticAs(p.Relay(), tree, []string{base}, p.tagMessage(name), tagTime(selected)), nil
+	return g.Objects.SyntheticAs(p.Relay(), tree, []string{base}, message, tagTime(selected)), nil
 }
 
 // commitTree returns the tree OID in the header of the commit bytes.

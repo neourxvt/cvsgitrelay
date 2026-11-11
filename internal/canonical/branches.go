@@ -131,9 +131,35 @@ func (p Policy) HeadRef() string {
 // ParseManifest is ParseManifest for manifests produced under this policy,
 // whose projections may include mapped branch refs.
 func (p Policy) ParseManifest(b []byte) (Manifest, error) {
-	return parseManifest(b, func(ref string) bool {
-		return ProjectionRef(ref) || p.MappedBranchRef(ref) || (p.Version() == 3 && validTagRef(ref)) || (p.ReadableBranches && validReadableBranchRef(ref))
-	})
+	m, err := parseManifest(b, func(ref string) bool {
+		return ProjectionRef(ref) || p.MappedBranchRef(ref) || (p.Version() == 3 && validTagRef(ref)) || (p.ReadableBranches && validReadableBranchRef(ref)) ||
+			(p.Growing && validTagVersionRef(ref))
+	}, p.Growing)
+	if err != nil || !p.Growing {
+		return m, err
+	}
+	// Every published tag version keeps its ref, and every tag ref belongs
+	// to a recorded version.
+	versions := 0
+	for name, tag := range m.Tags {
+		for v := 1; v <= tag.Versions; v++ {
+			ref, e := p.TagVersionRef(name, v)
+			if e != nil || m.Refs[ref] == "" {
+				return m, fmt.Errorf("published tag version lost its ref")
+			}
+		}
+		versions += tag.Versions
+	}
+	tags := 0
+	for ref := range m.Refs {
+		if p.IsTagRef(ref) {
+			tags++
+		}
+	}
+	if tags != versions {
+		return m, fmt.Errorf("tag ref without a published version")
+	}
+	return m, nil
 }
 
 // ValidBranchName applies the rules of git check-ref-format to a branch name
