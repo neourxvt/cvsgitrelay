@@ -305,7 +305,7 @@ func Build(input Inventory, p Policy) (Generation, error) {
 				if id != "trunk" && name == TrunkBranch && p.BranchMapped() {
 					return Generation{}, fmt.Errorf("a CVS branch named %q cannot be told apart from the trunk in a branch map", TrunkBranch)
 				}
-				ref, selected, e := p.BranchRef(name)
+				ref, selected, e := p.branchRef(name, id == "trunk")
 				if e != nil {
 					return Generation{}, e
 				}

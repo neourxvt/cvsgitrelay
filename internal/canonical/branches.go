@@ -1,6 +1,7 @@
 package canonical
 
 import (
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -14,21 +15,71 @@ const TrunkBranch = "trunk"
 const branchPrefix = "refs/heads/"
 
 // BranchMapped reports whether the policy selects and renames branches. An
-// empty map keeps the default projection of every branch under refs/heads/cvs/.
+// empty map keeps the default projection of every branch: under
+// refs/heads/cvs/, or by readable name with ReadableBranches.
 func (p Policy) BranchMapped() bool { return len(p.Branches) > 0 }
 
 // BranchRef returns the Git ref of a CVS branch under the branch map and
 // whether the branch is selected. Without a map the default encoding applies.
+// The name "trunk" denotes the trunk.
 func (p Policy) BranchRef(name string) (string, bool, error) {
-	if !p.BranchMapped() {
-		if name == TrunkBranch {
-			return "refs/heads/cvs/trunk", true, nil
-		}
+	return p.branchRef(name, name == TrunkBranch)
+}
+
+// branchRef is BranchRef for a name known to denote the trunk or not, so that
+// readable names can tell the trunk from a CVS branch literally named trunk.
+func (p Policy) branchRef(name string, trunk bool) (string, bool, error) {
+	switch {
+	case p.BranchMapped():
+		target, ok := p.Branches[name]
+		return branchPrefix + target, ok, nil
+	case p.ReadableBranches && trunk:
+		return branchPrefix + TrunkBranch, true, nil
+	case p.ReadableBranches:
+		ref, err := readableBranchRef(name)
+		return ref, true, err
+	case name == TrunkBranch:
+		return "refs/heads/cvs/trunk", true, nil
+	default:
 		ref, err := EncodedRef("refs/heads/cvs/", name)
 		return ref, true, err
 	}
-	target, ok := p.Branches[name]
-	return branchPrefix + target, ok, nil
+}
+
+// readableBranchRef returns refs/heads/<name> for a CVS branch whose name is a
+// safe ref name, and refs/heads/cvs-raw/<hex name> otherwise. The ref depends
+// on the name alone, so a new branch never renames an existing one. Plain
+// names contain no slash, which keeps them apart from the cvs-raw directory;
+// that directory's own name, the trunk's and HEAD are reserved.
+func readableBranchRef(name string) (string, error) {
+	if plainTagName.MatchString(name) && name != rawTagDir && name != TrunkBranch && name != "HEAD" && ValidBranchName(name) {
+		return branchPrefix + name, nil
+	}
+	ref := branchPrefix + rawTagDir + "/" + Hex(name)
+	if len(ref) > MaxRef {
+		return "", fmt.Errorf("unsupported ref length")
+	}
+	return ref, nil
+}
+
+// validReadableBranchRef accepts exactly the refs readable naming can produce.
+func validReadableBranchRef(ref string) bool {
+	name, ok := strings.CutPrefix(ref, branchPrefix)
+	if !ok || name == "" {
+		return false
+	}
+	if name == TrunkBranch {
+		return true
+	}
+	if h, raw := strings.CutPrefix(name, rawTagDir+"/"); raw {
+		b, err := hex.DecodeString(h)
+		if err != nil || h == "" || Hex(string(b)) != h {
+			return false
+		}
+		name = string(b)
+	}
+	got, err := readableBranchRef(name)
+	return err == nil && got == ref
 }
 
 // MappedBranchRef reports whether ref is a branch ref this policy's map owns.
@@ -45,11 +96,26 @@ func (p Policy) MappedBranchRef(ref string) bool {
 	return false
 }
 
-// HeadRef is the branch a clone checks out: the mapped trunk, or the first
-// mapped branch by Git branch name if the trunk is not selected.
+// IsBranchRef reports whether ref belongs to the branch projections of this
+// policy. Readable names own all of refs/heads/, as format 3 tags own all of
+// refs/tags/, so a branch pushed there by hand counts as an unexpected ref.
+func (p Policy) IsBranchRef(ref string) bool {
+	switch {
+	case p.BranchMapped():
+		return p.MappedBranchRef(ref)
+	case p.ReadableBranches:
+		return strings.HasPrefix(ref, branchPrefix)
+	default:
+		return strings.HasPrefix(ref, "refs/heads/cvs/")
+	}
+}
+
+// HeadRef is the branch a clone checks out: the trunk, or the first mapped
+// branch by Git branch name if a map does not select the trunk.
 func (p Policy) HeadRef() string {
 	if !p.BranchMapped() {
-		return "refs/heads/cvs/trunk"
+		ref, _, _ := p.branchRef(TrunkBranch, true)
+		return ref
 	}
 	if t, ok := p.Branches[TrunkBranch]; ok {
 		return branchPrefix + t
@@ -66,7 +132,7 @@ func (p Policy) HeadRef() string {
 // whose projections may include mapped branch refs.
 func (p Policy) ParseManifest(b []byte) (Manifest, error) {
 	return parseManifest(b, func(ref string) bool {
-		return ProjectionRef(ref) || p.MappedBranchRef(ref) || (p.Version() == 3 && validTagRef(ref))
+		return ProjectionRef(ref) || p.MappedBranchRef(ref) || (p.Version() == 3 && validTagRef(ref)) || (p.ReadableBranches && validReadableBranchRef(ref))
 	})
 }
 

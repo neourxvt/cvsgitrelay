@@ -39,9 +39,16 @@ type Policy struct {
 	// Branches selects and renames the branches projected as Git branches: it
 	// maps "trunk" or a raw CVS branch name to a Git branch name. Unmapped
 	// branches get no branch ref, though their history stays in the object
-	// store. Empty projects every branch under refs/heads/cvs/. Like the rest
-	// of the policy it is fixed at init.
+	// store. Empty projects every branch under refs/heads/cvs/, or by its
+	// readable name with ReadableBranches. Like the rest of the policy it is
+	// fixed at init.
 	Branches map[string]string `json:",omitempty"`
+	// ReadableBranches projects the trunk as refs/heads/trunk and every other
+	// branch as refs/heads/<name>, or refs/heads/cvs-raw/<hex name> when the
+	// name is unsafe or reserved, like format 3 tags. The destination then owns
+	// all of refs/heads/. Only format 3 without a branch map supports it; like
+	// the rest of the policy it is fixed at init.
+	ReadableBranches bool `json:",omitempty"`
 	// Executable gives files whose CVS archive is executable Git mode 100755.
 	// CVS keeps that bit on the archive, so it applies to every revision, and
 	// a later chmod of the archive changes them all. Without it every file is
@@ -106,6 +113,9 @@ func (p Policy) Validate() error {
 	if err := p.validateBranches(); err != nil {
 		return err
 	}
+	if p.ReadableBranches && (p.Version() != 3 || p.BranchMapped()) {
+		return fmt.Errorf("readable branch names require destination format 3 without a branch map")
+	}
 	if len(p.Mappings) == 0 {
 		return fmt.Errorf("explicit archive mapping required")
 	}
@@ -167,6 +177,10 @@ func (p Policy) Bytes() []byte {
 			b = append(b, frame(name)...)
 			b = append(b, frame(p.Branches[name])...)
 		}
+	}
+	// Like the map, the readable naming joins the policy only when used.
+	if p.ReadableBranches {
+		b = append(b, frame("readable-branch-names-v1")...)
 	}
 	return b
 }
