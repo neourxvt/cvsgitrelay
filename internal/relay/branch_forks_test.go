@@ -64,6 +64,7 @@ func gitBlobs(t *testing.T, r *Repository, commit string) map[string]string {
 // Both sync, match their CVS checkouts, and adding a file on a branch later
 // only appends to it.
 func TestBranchesForkingFromSeveralLines(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	imported := filepath.Join(t.TempDir(), "import")

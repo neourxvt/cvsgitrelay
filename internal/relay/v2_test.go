@@ -19,6 +19,11 @@ import (
 	"cvsgitrelay/internal/process"
 )
 
+// Most tests call t.Parallel: their time is spent in CVS sleeping to the next
+// whole second after it writes files, not in CPU work. Every test builds its
+// own CVS root and destinations. Tests that set environment variables or
+// replace package variables stay serial; Go runs them before resuming the
+// parallel ones, so the changes never overlap.
 func testRunner() *process.Runner {
 	return &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 32 << 20}
 }
@@ -76,6 +81,7 @@ func testTreeEntries(t *testing.T, r *Repository, oid string) (map[string]testTr
 }
 
 func TestV2RealCVSBytesAndNoop(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, ":fork:"+root, "full")
@@ -130,6 +136,7 @@ func TestV2RealCVSBytesAndNoop(t *testing.T) {
 }
 
 func TestV2FailedFirstScanAndLostState(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")
@@ -170,6 +177,7 @@ func TestV2FailedFirstScanAndLostState(t *testing.T) {
 }
 
 func TestV2FreshIncrementalConvergenceAndSymbols(t *testing.T) {
+	t.Parallel()
 	root, work, _ := fixture(t)
 	ctx := context.Background()
 	r := openCanonicalFixture(t, root, "full")
@@ -212,6 +220,7 @@ func TestV2FreshIncrementalConvergenceAndSymbols(t *testing.T) {
 }
 
 func TestV2SourceMutationMissingRaceAndTrust(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	strict := openFixture(t, root, "full")
@@ -301,6 +310,7 @@ func TestV2SourceMutationMissingRaceAndTrust(t *testing.T) {
 }
 
 func TestV2ImmutableMetadataAndMutableAdministration(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")
@@ -374,6 +384,7 @@ func TestV2ImmutableMetadataAndMutableAdministration(t *testing.T) {
 }
 
 func TestV2BinaryCheckoutSemantics(t *testing.T) {
+	t.Parallel()
 	root, work, binary := fixture(t)
 	next := append(slices.Clone(binary), []byte("\x00\xff\r\nunterminated")...)
 	writeFixture(t, filepath.Join(work, "binary file"), next)
@@ -400,6 +411,7 @@ func TestV2BinaryCheckoutSemantics(t *testing.T) {
 }
 
 func TestV2StateAloneSurvivesGC(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")
@@ -436,6 +448,7 @@ func TestV2StateAloneSurvivesGC(t *testing.T) {
 }
 
 func TestV2PublicationRecoveryAndDivergence(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	reference := openFixture(t, root, "full")
@@ -445,6 +458,7 @@ func TestV2PublicationRecoveryAndDivergence(t *testing.T) {
 	expectedState := reference.StateOID
 	for _, stage := range []string{"fetch-complete", "scan-complete", "commit-written", "objects-written", "before-journal", "journal-written", "before-publish", "after-publish", "projection-updated:1", "projection-updated:3", "before-journal-cleanup"} {
 		t.Run(stage, func(t *testing.T) {
+			t.Parallel()
 			r := openFixture(t, root, "full")
 			old := r.StateOID
 			if _, err := r.Sync(ctx, Options{Failpoint: stage}); diag.Code(err) != "injected" {
@@ -485,6 +499,7 @@ func TestV2PublicationRecoveryAndDivergence(t *testing.T) {
 		})
 	}
 	t.Run("unknown projection", func(t *testing.T) {
+		t.Parallel()
 		r := openFixture(t, root, "full")
 		if _, err := r.Sync(ctx, Options{Failpoint: "after-publish"}); diag.Code(err) != "injected" {
 			t.Fatal(diag.Details(err, false))
@@ -507,6 +522,7 @@ func TestV2PublicationRecoveryAndDivergence(t *testing.T) {
 }
 
 func TestV2RejectPolicyDrift(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")

@@ -51,6 +51,7 @@ func TestUnreachableCVSIsRetryable(t *testing.T) {
 // Two complete scans that disagree mean the source moved during the read; the
 // next run reads it again.
 func TestChangingSourceIsRetryable(t *testing.T) {
+	t.Parallel()
 	r := &Repository{Config: Config{CVSRoot: ":pserver:anonymous@cvs.example.org:/cvs", SourceID: "source"}, Runner: testRunner()}
 	scans := 0
 	r.sourceReader = func(context.Context) (canonical.Inventory, sourceStats, error) {

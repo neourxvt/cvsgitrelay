@@ -11,6 +11,7 @@ import (
 
 // Results arrive in request order while at most the connection limit runs.
 func TestRevisionFetchesOrderAndLimit(t *testing.T) {
+	t.Parallel()
 	var revisions []*Revision
 	for i := 0; i < 40; i++ {
 		revisions = append(revisions, &Revision{Number: fmt.Sprintf("1.%d", i+1)})
@@ -38,6 +39,7 @@ func TestRevisionFetchesOrderAndLimit(t *testing.T) {
 
 // A failed fetch is delivered at its own position and stops further work.
 func TestRevisionFetchesError(t *testing.T) {
+	t.Parallel()
 	revisions := []*Revision{{Number: "1.1"}, {Number: "1.2"}, {Number: "1.3"}}
 	failure := errors.New("transport failed")
 	fetches := newAllRevisionFetches(context.Background(), revisions, 2, func(ctx context.Context, rev *Revision) (int, error) {

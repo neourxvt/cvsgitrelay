@@ -35,6 +35,7 @@ func requireFastForward(t *testing.T, r *Repository, state string, refs map[stri
 // it, and keeps deleted tags, publishing a retagged one under a new name.
 // Every sync only moves refs forward and verify accepts every generation.
 func TestGrowingHistoryOnlyMovesForward(t *testing.T) {
+	t.Parallel()
 	root, work, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")
@@ -135,6 +136,7 @@ func TestGrowingHistoryOnlyMovesForward(t *testing.T) {
 // elsewhere rejects the push instead of losing that work, and accepts the
 // next one once the branch is back.
 func TestGrowingPushNeverForces(t *testing.T) {
+	t.Parallel()
 	for _, spec := range pushRefspecs(true) {
 		if strings.HasPrefix(spec, "+") {
 			t.Fatalf("growing history forces %s", spec)
@@ -177,6 +179,7 @@ func TestGrowingPushNeverForces(t *testing.T) {
 // The publication of growing history refuses a generation that would delete
 // a ref or move one sideways, whatever built it.
 func TestGrowingPublicationRequiresFastForward(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")

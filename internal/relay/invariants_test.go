@@ -3,6 +3,7 @@ package relay
 import "testing"
 
 func TestSourceLocatorsAndPaths(t *testing.T) {
+	t.Parallel()
 	if compareNumber("1.9", "1.10") >= 0 {
 		t.Fatal("revision ordering was lexicographic")
 	}

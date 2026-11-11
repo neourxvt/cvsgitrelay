@@ -15,6 +15,7 @@ import (
 // The main physical directory can share its name with a composite alias, as
 // rxvt-unicode does. Checkout observation must bypass that alias expansion.
 func TestMirrorCompositeAliasMatchingPhysicalDirectory(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("cvs"); err != nil {
 		t.Skip("CVS is required")
 	}

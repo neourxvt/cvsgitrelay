@@ -29,6 +29,7 @@ func TestV2KillHelper(t *testing.T) {
 }
 
 func TestV2ProcessCrashRecovery(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	reference := openFixture(t, root, "full")
@@ -38,6 +39,7 @@ func TestV2ProcessCrashRecovery(t *testing.T) {
 	want := reference.StateOID
 	for _, stage := range []string{"fetch-complete", "commit-written", "objects-written", "before-journal", "journal-written", "before-publish", "after-publish", "projection-updated:1", "projection-updated:2", "before-journal-cleanup"} {
 		t.Run(stage, func(t *testing.T) {
+			t.Parallel()
 			r := openFixture(t, root, "full")
 			path := r.Path
 			r.Close()
@@ -64,10 +66,12 @@ func TestV2ProcessCrashRecovery(t *testing.T) {
 }
 
 func TestV2DamagedRecoveryEvidence(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	for _, failure := range []string{"lost-journal", "missing-journal-object", "corrupt-object", "changed-state"} {
 		t.Run(failure, func(t *testing.T) {
+			t.Parallel()
 			r := openFixture(t, root, "full")
 			old := r.StateOID
 			if _, err := r.Sync(ctx, Options{Failpoint: "after-publish"}); diag.Code(err) != "injected" {
@@ -115,6 +119,7 @@ func TestV2DamagedRecoveryEvidence(t *testing.T) {
 }
 
 func TestV2FailedReadsAndProjectionDeletion(t *testing.T) {
+	t.Parallel()
 	root, work, _ := fixture(t)
 	ctx := context.Background()
 	// Only canonical history deletes the ref of a deleted tag.

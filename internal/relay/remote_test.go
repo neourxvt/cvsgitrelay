@@ -44,6 +44,7 @@ func gitIn(t *testing.T, path string, args ...string) string {
 // remote of canonical history back to the local generation, prunes refs the
 // local generation does not have, and keeps local bookkeeping refs to itself.
 func TestSyncPushesToRemote(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openCanonicalFixture(t, root, "full")
@@ -94,6 +95,7 @@ func TestSyncPushesToRemote(t *testing.T) {
 // A remote that cannot be reached fails the sync after the local generation
 // is published, and the next sync pushes again.
 func TestSyncReportsFailedPush(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")
@@ -111,6 +113,7 @@ func TestSyncReportsFailedPush(t *testing.T) {
 }
 
 func TestValidateRemote(t *testing.T) {
+	t.Parallel()
 	for _, ok := range []string{"", "git@github.com:owner/repo.git", "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo.git", "/srv/repo.git"} {
 		if err := ValidateRemote(ok); err != nil {
 			t.Errorf("%q rejected: %v", ok, err)
@@ -126,6 +129,7 @@ func TestValidateRemote(t *testing.T) {
 // The token reaches the server as a Basic authorization header on the first
 // request, and neither the logged command nor a failure report repeats it.
 func TestPushSendsTokenWithoutLeaking(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	r := openFixture(t, root, "full")
 	const token = "ghp_TESTTOKEN1234567890"
@@ -155,6 +159,7 @@ func TestPushSendsTokenWithoutLeaking(t *testing.T) {
 
 // A token is sent only over https, and only to the configured remote.
 func TestTokenEnvScopedToRemote(t *testing.T) {
+	t.Parallel()
 	if env := tokenEnv("https://github.com/o/r.git", ""); env != nil {
 		t.Errorf("environment without a token: %v", env)
 	}

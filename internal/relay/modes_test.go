@@ -19,6 +19,7 @@ import (
 // a root checkout and, through one historical checkout, of removed files, and
 // leaves out archives that never had a live revision to expose a mode.
 func TestObserveModesReportsArchiveModes(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("cvs"); err != nil {
 		t.Skip("CVS is required")
 	}
@@ -109,8 +110,12 @@ func chmodArchive(t *testing.T, root, archive string, mode os.FileMode) {
 // history rewrites the branches and supersedes the old generation, growing
 // history adds correction commits on top of them.
 func TestSyncKeepsExecutableModes(t *testing.T) {
+	t.Parallel()
 	for _, history := range []string{"growing", "canonical"} {
-		t.Run(history, func(t *testing.T) { testSyncKeepsExecutableModes(t, history) })
+		t.Run(history, func(t *testing.T) {
+			t.Parallel()
+			testSyncKeepsExecutableModes(t, history)
+		})
 	}
 }
 
@@ -172,6 +177,7 @@ func testSyncKeepsExecutableModes(t *testing.T, history string) {
 // records. Like an edit of old content, a chmod alone surfaces only when the
 // archive gets a new revision or a scheduled content check reads it again.
 func TestTrustModeObservesModesOfChangedArchives(t *testing.T) {
+	t.Parallel()
 	root, work, _ := fixture(t)
 	ctx := context.Background()
 	chmodArchive(t, root, "active,v", 0555)

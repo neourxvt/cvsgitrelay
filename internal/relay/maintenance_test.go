@@ -14,6 +14,7 @@ import (
 // GC is due once the interval has passed since the last success, waits a day
 // after a failure, and is not postponed by a record from a clock set ahead.
 func TestMaintenanceDue(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	month := 30 * 24 * time.Hour
 	for name, tc := range map[string]struct {
@@ -67,6 +68,7 @@ func writeLoose(t *testing.T, r *Repository, body string, age time.Duration) str
 // loose objects, deletes only long unreachable objects, and
 // does not run again before the interval has passed.
 func TestSyncRunsScheduledMaintenance(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")

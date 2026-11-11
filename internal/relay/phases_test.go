@@ -12,6 +12,7 @@ import (
 // Every phase start is logged, and the final line lists each phase once, in
 // first-run order, with repeated phases added together.
 func TestPhaseTimerDurations(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	timer := newPhaseTimer(context.Background(), slog.New(slog.NewJSONHandler(&out, nil)), 0, "Sync progress")
 	timer.begin("read_source", "Reading", "scans", 1)

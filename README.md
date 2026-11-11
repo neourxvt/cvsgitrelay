@@ -297,7 +297,7 @@ unsupported. Git object/reference fsync is enabled; process-crash tests do not
 establish power-loss durability for arbitrary storage.
 
 [The v2 format contract](doc-format-v2.md) specifies exact bytes, profile limits,
-source normalization and executable goldens. Run `go test -timeout 30m ./...` for the format,
+source normalization and executable goldens. Run `go test ./...` for the format,
 source, convergence, GC, locking and recovery checks. Full replay retains the whole
 normalized inventory and generated objects in memory; it has no changed-revisions-only
 performance claim. Summaries report archive bytes/reads, newly written Git objects

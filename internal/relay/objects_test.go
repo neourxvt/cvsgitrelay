@@ -15,6 +15,7 @@ import (
 // Batched object I/O needs only Git, not CVS or reftable: store a generation,
 // validate it like a reopened state, repack it, and detect a damaged payload.
 func TestBatchedObjectStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	runner := testRunner()
 	// A small output budget forces several cat-file batches.
@@ -91,6 +92,7 @@ func TestBatchedObjectStore(t *testing.T) {
 // Format 3 events must pass the reopened-state verifier and git fsck --strict
 // for every kind of log, and show readable authors and logs in git log.
 func TestFormat3EventsVerify(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	runner := testRunner()
 	path := filepath.Join(t.TempDir(), "objects.git")
@@ -159,6 +161,7 @@ func TestFormat3EventsVerify(t *testing.T) {
 // reserved cvs/ namespace, keeps them under the divergence checks, and a
 // reopened state accepts them.
 func TestBranchMapPublication(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	runner := testRunner()
 	path := filepath.Join(t.TempDir(), "objects.git")

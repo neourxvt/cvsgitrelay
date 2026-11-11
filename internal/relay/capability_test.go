@@ -82,6 +82,7 @@ func writeFixture(t testing.TB, path string, content []byte) {
 }
 
 func TestCVSCapability(t *testing.T) {
+	t.Parallel()
 	root, _, binary := fixture(t)
 	out := fixtureCVS(t, ":fork:"+root, "", "rlog", "module")
 	for _, want := range []string{"Attic/removed,v", "revision 1.2", "state: dead;", "branch-only,v", "feature: 1.2.0.2", "revision 1.1.1.1", "symbolic names:"} {
@@ -102,6 +103,7 @@ func TestCVSCapability(t *testing.T) {
 // Captured separator-like logs must survive the shared remote acquisition
 // grammar used by both Git import and the independent CVS-to-CVS mirror.
 func TestCapturedMirrorRlogDialect(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("../../testdata/gnu-cvs-1.11.23.rlog")
 	if err != nil {
 		t.Fatal(err)

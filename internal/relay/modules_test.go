@@ -13,6 +13,7 @@ import (
 )
 
 func TestSchmorpModules(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("../../testdata/schmorp-modules.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +50,7 @@ func TestSchmorpModules(t *testing.T) {
 }
 
 func TestCompositeModuleImport(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "source")
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)

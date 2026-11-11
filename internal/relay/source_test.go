@@ -72,6 +72,7 @@ func TestV2RemoteCVSImport(t *testing.T) {
 // A complete listing, branch declarations and existing forkpoints establish
 // the supported logical ancestry. Inaccessible forkpoints are never invented.
 func TestReportedAncestry(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("../../testdata/gnu-cvs-1.11.23.rlog")
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +138,7 @@ func TestRlogFramingImitationRejected(t *testing.T) {
 // Local CVSROOTs ignore the configured remote connection limit and use every
 // core; network transports keep the configured limit.
 func TestSourceConnections(t *testing.T) {
+	t.Parallel()
 	for _, root := range []string{"/srv/cvs", ":local:/srv/cvs", ":fork:/srv/cvs"} {
 		if got := sourceConnections(root, 1); got != runtime.NumCPU() {
 			t.Fatalf("%s: %d connections", root, got)
@@ -153,6 +155,7 @@ func TestSourceConnections(t *testing.T) {
 // update while it is read, and is refused while mirror holds its lock. Every
 // other source keeps the confirming second scan.
 func TestAcceptSourceScansOfLocalMirrors(t *testing.T) {
+	t.Parallel()
 	plain := t.TempDir()
 	mirror := t.TempDir()
 	lockPath := filepath.Join(mirror, mirrorStateDir, "lock")
@@ -209,6 +212,7 @@ func TestAcceptSourceScansOfLocalMirrors(t *testing.T) {
 // A configuration without a verification mode accepts the pinned one; a named
 // mode must match it.
 func TestRequestedPolicyMode(t *testing.T) {
+	t.Parallel()
 	for _, pinned := range []string{"full", "trust-append-only"} {
 		r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: pinned, Format: 3}}}
 		if err := r.ValidateRequestedPolicy("s", "", "", nil, nil); err != nil {
@@ -227,6 +231,7 @@ func TestRequestedPolicyMode(t *testing.T) {
 // A configuration without a history model accepts the pinned one; a named
 // model must match it.
 func TestRequestedPolicyHistory(t *testing.T) {
+	t.Parallel()
 	for _, growing := range []bool{true, false} {
 		r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: "full", Format: 3, Growing: growing}}}
 		pinned, other := "growing", "canonical"
@@ -246,6 +251,7 @@ func TestRequestedPolicyHistory(t *testing.T) {
 
 // Both maps are part of the destination's policy and cannot change later.
 func TestRequestedPolicyMaps(t *testing.T) {
+	t.Parallel()
 	r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: "full", Format: 3, Authors: map[string]string{"a": "A <a@x>"}, Branches: map[string]string{"trunk": "main"}}}}
 	if err := r.ValidateRequestedPolicy("s", "full", "", map[string]string{"a": "A <a@x>"}, map[string]string{"trunk": "main"}); err != nil {
 		t.Fatal(err)

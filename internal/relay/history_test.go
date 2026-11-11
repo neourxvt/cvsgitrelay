@@ -55,6 +55,7 @@ func editArchive(t *testing.T, archive, old, new string) []byte {
 // superseded ref, even through GC. When the revision comes back, the original
 // generation returns exactly.
 func TestAcceptedHistoryChangesKeepTheOldGeneration(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openCanonicalFixture(t, root, "full")
@@ -114,6 +115,7 @@ func TestAcceptedHistoryChangesKeepTheOldGeneration(t *testing.T) {
 // A source that lost most of its accepted history looks damaged, not edited,
 // and is refused even with acceptance on.
 func TestMostlyMissingHistoryIsRefused(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "full")
@@ -136,6 +138,7 @@ func TestMostlyMissingHistoryIsRefused(t *testing.T) {
 // A trust-append-only destination misses byte-only edits of old revisions
 // until a scheduled content check reads every revision again.
 func TestScheduledContentCheckFindsEditedContent(t *testing.T) {
+	t.Parallel()
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	r := openFixture(t, root, "trust-append-only")
