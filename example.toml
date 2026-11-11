@@ -223,8 +223,10 @@ failpoint = ""
 # trunk = "main"
 # "REL-9_30" = "release/9.30"
 
-# Fixed v2 profiles: exact CVS -kb bytes, mode 100644, SHA-1 Git objects, ASCII
-# provenance and manifest, complete deterministic replay, single state-ref CAS.
+# Fixed v2 profiles: exact CVS -kb bytes, mode 100755 for files of executable
+# CVS archives and 100644 otherwise (100644 only in destinations created before
+# executable modes existed), SHA-1 Git objects, ASCII provenance and manifest,
+# complete deterministic replay, single state-ref CAS.
 # Remote Git imports require only normal CVS read access, without server files.
 # The complete rlog dialect, ancestry and log normalization are specified in
 # doc-format-v2.md.

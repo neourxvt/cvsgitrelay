@@ -45,7 +45,14 @@ whole read, `mirror` cannot update it meanwhile, and a sync started while
 `mirror` runs fails with a lock error.
 
 One designated event commit preserves each CVS revision, including dead and
-unchanged-tree revisions. Trees use exact binary content and mode 100644. Named,
+unchanged-tree revisions. Trees use exact binary content. A file whose CVS
+archive is executable has mode 100755, every other file 100644. CVS keeps that
+bit on the RCS archive rather than per revision, so it applies to all revisions
+of the file, as in any CVS checkout, and a later chmod of the archive on the
+server changes the file's whole history. That change is handled like any other
+changed revision (see below). Destinations created before executable modes
+existed keep mode 100644 for every file; to switch, sync into a new
+`destination.repo`. Named,
 unnamed, vendor and nested lines are retained. Branch seeds and tag snapshots are
 explicitly synthetic reconstructions; they do not represent atomic CVS changesets.
 A branch seed holds the exact fork revision of every file. When its files fork
@@ -122,6 +129,10 @@ the CVS reader consistently represents their unavailable content as absent.
 fingerprinted content from a nonauthoritative local cache. It notices
 old-content edits with unchanged metadata only in the sync that
 `maintenance.verify_days` (default 30) schedules to read every revision again.
+The executable bit follows the same rule: CVS exposes it only through a real
+checkout, so `"full"` checks out the module on every scan, while
+`"trust-append-only"` checks out only files with new revisions and notices a
+chmod alone with the file's next revision or the scheduled content check.
 A configuration without `verify.mode` keeps the mode of an existing
 destination. Damaged or missing caches fall back to source reads. Metadata is always
 re-enumerated over the full scope; valid old cached content can skip a checkout.
