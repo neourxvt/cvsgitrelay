@@ -22,11 +22,26 @@ import (
 func testRunner() *process.Runner {
 	return &process.Runner{Log: process.DiscardLogger(), Timeout: time.Minute, MaxOutput: 32 << 20}
 }
+
+// openFixture creates a destination with the default growing history.
 func openFixture(t testing.TB, root, verify string) *Repository {
+	t.Helper()
+	return openHistoryFixture(t, root, verify, "growing")
+}
+
+// openCanonicalFixture creates a destination with canonical history, for
+// tests of what only canonical history does: rebuilding history from the
+// source alone, superseding rewritten generations and forcing the remote.
+func openCanonicalFixture(t testing.TB, root, verify string) *Repository {
+	t.Helper()
+	return openHistoryFixture(t, root, verify, "canonical")
+}
+
+func openHistoryFixture(t testing.TB, root, verify, history string) *Repository {
 	t.Helper()
 	dest := filepath.Join(t.TempDir(), "mirror.git")
 	runner := testRunner()
-	if err := Init(context.Background(), runner, dest, root, "module", "test-source", "include", verify, nil, nil); err != nil {
+	if err := Init(context.Background(), runner, dest, root, "module", "test-source", "include", verify, history, nil, nil); err != nil {
 		t.Fatal(diag.Details(err, false))
 	}
 	r, err := Open(context.Background(), runner, dest)
@@ -157,7 +172,7 @@ func TestV2FailedFirstScanAndLostState(t *testing.T) {
 func TestV2FreshIncrementalConvergenceAndSymbols(t *testing.T) {
 	root, work, _ := fixture(t)
 	ctx := context.Background()
-	r := openFixture(t, root, "full")
+	r := openCanonicalFixture(t, root, "full")
 	if _, err := r.Sync(ctx, Options{}); err != nil {
 		t.Fatal(diag.Details(err, false))
 	}
@@ -176,7 +191,7 @@ func TestV2FreshIncrementalConvergenceAndSymbols(t *testing.T) {
 	if err := os.CopyFS(copyRoot, os.DirFS(root)); err != nil {
 		t.Fatal(err)
 	}
-	fresh := openFixture(t, ":fork:"+copyRoot, "full")
+	fresh := openCanonicalFixture(t, ":fork:"+copyRoot, "full")
 	if _, err := fresh.Sync(ctx, Options{Connections: 4}); err != nil {
 		t.Fatal(diag.Details(err, false))
 	}

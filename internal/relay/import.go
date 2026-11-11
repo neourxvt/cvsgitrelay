@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"strconv"
@@ -61,6 +62,9 @@ type Summary struct {
 	HistoryChanged int    `json:"history_changed,omitempty"`
 	HistoryRemoved int    `json:"history_removed,omitempty"`
 	Superseded     string `json:"superseded,omitempty"`
+	// Corrections counts the commits that growing history added to bring
+	// branches to the current source after published history changed.
+	Corrections int `json:"corrections,omitempty"`
 	// ContentChecked is set when sync read every revision from the source
 	// instead of the trust-append-only content cache.
 	ContentChecked bool `json:"content_checked,omitempty"`
@@ -122,7 +126,7 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 		return Summary{}, err
 	}
 	r.phases.begin("build_history", "Building Git history", "revisions", len(in.Records))
-	g, err := canonical.Build(in, r.Config.Policy)
+	g, err := r.build(ctx, in)
 	if err != nil {
 		return Summary{}, diag.New("source", "canonical.build", "source cannot form an unambiguous canonical graph", err)
 	}
@@ -139,8 +143,12 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	previous := r.StateOID
 	if len(r.changes) > 0 {
 		// Keep the replaced generation before anything can replace it.
-		if s.Superseded, err = r.supersede(ctx, now); err != nil {
-			return Summary{}, err
+		// Growing history replaces nothing: the published commits stay
+		// reachable from the refs that only move forward.
+		if !r.Config.Policy.Growing {
+			if s.Superseded, err = r.supersede(ctx, now); err != nil {
+				return Summary{}, err
+			}
 		}
 		for _, c := range r.changes {
 			if c.Removed {
@@ -153,7 +161,11 @@ func (r *Repository) Sync(ctx context.Context, opts Options) (Summary, error) {
 	if err := r.publishGeneration(ctx, g, &opts); err != nil {
 		return Summary{}, err
 	}
-	if len(r.changes) > 0 && r.Runner.Log != nil {
+	s.Corrections = g.Corrections
+	if len(r.changes) > 0 && r.Runner.Log != nil && r.Config.Policy.Growing {
+		r.Runner.Log.Warn("Accepted changed CVS history; the published history stays and correction commits bring the affected branches to the current source",
+			"changed", s.HistoryChanged, "removed", s.HistoryRemoved, "corrections", s.Corrections, "revisions", changeList(r.changes, 20))
+	} else if len(r.changes) > 0 && r.Runner.Log != nil {
 		r.Runner.Log.Warn("Accepted changed CVS history and rewrote the affected branches; the previous history is kept under "+s.Superseded,
 			"changed", s.HistoryChanged, "removed", s.HistoryRemoved, "revisions", changeList(r.changes, 20))
 	}
@@ -249,7 +261,7 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 		return Summary{}, err
 	}
 	r.phases.begin("build_history", "Building Git history", "revisions", len(in.Records))
-	g, err := canonical.Build(in, r.Config.Policy)
+	g, err := r.build(ctx, in)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -258,6 +270,9 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 	s.SourceRequests = stats.Requests
 	if g.State != r.StateOID {
 		return s, diag.New("integrity", "verify.generation", "source has a different canonical generation; run sync", nil)
+	}
+	if r.Config.Policy.Growing {
+		return s, r.verifyGrowingObjects(ctx)
 	}
 	// Validate every expected raw object without rewriting objects or refs.
 	// Rehashing the stored bytes detects corruption independently of Git.
@@ -272,6 +287,57 @@ func (r *Repository) Verify(ctx context.Context, opts Options) (Summary, error) 
 		return s, err
 	}
 	return s, nil
+}
+
+// verifyGrowingObjects rehashes every object reachable from the state. A
+// growing build of the published state produces no objects, since nothing
+// changed, so the stored history is walked instead: all of it, including
+// commits that current CVS history no longer describes.
+func (r *Repository) verifyGrowingObjects(ctx context.Context) error {
+	out, err := r.git(ctx, nil, nil, "rev-list", "--objects", "--no-object-names", r.StateOID)
+	if err != nil {
+		return diag.New("integrity", "verify.objects", "published history is incomplete", err)
+	}
+	oids := strings.Fields(string(out))
+	r.phases.begin("check_objects", "Checking stored Git objects", "objects", len(oids))
+	return r.readObjects(ctx, oids, func(oid, kind string, data []byte) error {
+		if canonical.OID(kind, data) != oid {
+			return diag.New("integrity", "verify.objects", "canonical object is corrupt", nil, "oid", oid)
+		}
+		return nil
+	})
+}
+
+// build derives the generation for an accepted inventory. Canonical history
+// is a function of the source alone; growing history continues the published
+// generation.
+func (r *Repository) build(ctx context.Context, in canonical.Inventory) (canonical.Generation, error) {
+	if !r.Config.Policy.Growing {
+		return canonical.Build(in, r.Config.Policy)
+	}
+	return canonical.Grow(in, r.Config.Policy, r.published(ctx))
+}
+
+// published describes the current generation to a growing build, which
+// reads the published objects it continues from the repository. An empty
+// destination has no published generation.
+func (r *Repository) published(ctx context.Context) canonical.Published {
+	if r.StateOID == "" {
+		return canonical.Published{}
+	}
+	return canonical.Published{
+		State:    r.StateOID,
+		Manifest: r.Manifest,
+		Load: func(oids []string) (canonical.Objects, error) {
+			objects := canonical.Objects{}
+			err := r.readObjects(ctx, oids, func(oid, kind string, data []byte) error {
+				// readObjects reuses its buffer; the build keeps the data.
+				objects[oid] = canonical.Object{Kind: kind, Data: bytes.Clone(data)}
+				return nil
+			})
+			return objects, err
+		},
+	}
 }
 
 // hit is an explicit developer fault hook, never enabled by default. An ordinal

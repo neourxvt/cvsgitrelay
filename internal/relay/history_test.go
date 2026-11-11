@@ -50,13 +50,14 @@ func editArchive(t *testing.T, archive, old, new string) []byte {
 	return original
 }
 
-// A changed or removed revision is published when acceptance is on, and the
-// replaced generation stays reachable under one superseded ref, even through
-// GC. When the revision comes back, the original generation returns exactly.
+// Under canonical history, a changed or removed revision is published when
+// acceptance is on, and the replaced generation stays reachable under one
+// superseded ref, even through GC. When the revision comes back, the original
+// generation returns exactly.
 func TestAcceptedHistoryChangesKeepTheOldGeneration(t *testing.T) {
 	root, _, _ := fixture(t)
 	ctx := context.Background()
-	r := openFixture(t, root, "full")
+	r := openCanonicalFixture(t, root, "full")
 	if _, err := r.Sync(ctx, Options{}); err != nil {
 		t.Fatal(diag.Details(err, false))
 	}

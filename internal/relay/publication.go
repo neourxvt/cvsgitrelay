@@ -278,27 +278,50 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 		}
 		tips = append(tips, tip)
 	}
-	for ref, tip := range m.Refs {
-		if r.Config.Policy.IsTagRef(ref) {
+	var expected string
+	if r.Config.Policy.Growing {
+		// A branch whose CVS branch disappeared keeps an older value, so
+		// every published value joins the anchor, and the previous state
+		// follows it as the last parent.
+		for _, tip := range m.Refs {
 			tips = append(tips, tip)
-		} else if !slices.Contains(tips, tip) {
-			found := false
-			for _, lineTip := range m.Lines {
-				if lineTip == tip {
-					found = true
+		}
+		var parents []string
+		if anchor := o.Anchor(tips); anchor != "" {
+			parents = append(parents, anchor)
+		}
+		header, e := r.git(ctx, nil, nil, "cat-file", "commit", oid)
+		if e != nil {
+			return fail(e)
+		}
+		got := commitParents(header)
+		if len(got) == len(parents)+1 {
+			parents = append(parents, got[len(got)-1])
+		}
+		expected = o.Synthetic(tree, parents, "cvsgitrelay-state-v2\n")
+	} else {
+		for ref, tip := range m.Refs {
+			if r.Config.Policy.IsTagRef(ref) {
+				tips = append(tips, tip)
+			} else if !slices.Contains(tips, tip) {
+				found := false
+				for _, lineTip := range m.Lines {
+					if lineTip == tip {
+						found = true
+					}
+				}
+				if !found {
+					return fail(fmt.Errorf("projection is not a line tip"))
 				}
 			}
-			if !found {
-				return fail(fmt.Errorf("projection is not a line tip"))
-			}
 		}
+		anchor := o.Anchor(tips)
+		var parents []string
+		if anchor != "" {
+			parents = []string{anchor}
+		}
+		expected = o.Synthetic(tree, parents, "cvsgitrelay-state-v2\n")
 	}
-	anchor := o.Anchor(tips)
-	var parents []string
-	if anchor != "" {
-		parents = []string{anchor}
-	}
-	expected := o.Synthetic(tree, parents, "cvsgitrelay-state-v2\n")
 	if expected != oid {
 		return fail(fmt.Errorf("state/manifest envelope mismatch"))
 	}
@@ -313,18 +336,52 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 	for _, id := range strings.Fields(string(ancestry)) {
 		reachable[id] = true
 	}
+	if r.Config.Policy.Growing {
+		if err := r.checkChangesets(ctx, m, reachable); err != nil {
+			return fail(err)
+		}
+	} else if err := r.checkEvents(ctx, m, reachable); err != nil {
+		return fail(err)
+	}
+	for _, tip := range m.Refs {
+		if !reachable[tip] {
+			return fail(fmt.Errorf("unreachable projection"))
+		}
+	}
+	r.phases.begin("fsck", "Running git fsck on the generation")
+	if _, err := r.git(ctx, nil, nil, "fsck", "--strict", "--no-dangling", oid); err != nil {
+		return fail(err)
+	}
+	return m, nil
+}
+
+// commitParents returns the parents in the header of commit bytes.
+func commitParents(commit []byte) []string {
+	head, _, _ := bytes.Cut(commit, []byte("\n\n"))
+	var parents []string
+	for _, line := range strings.Split(string(head), "\n") {
+		if parent, ok := strings.CutPrefix(line, "parent "); ok {
+			parents = append(parents, parent)
+		}
+	}
+	return parents
+}
+
+// checkEvents requires every revision of a canonical manifest to have its own
+// reachable event commit that encodes exactly that revision.
+func (r *Repository) checkEvents(ctx context.Context, m canonical.Manifest, reachable map[string]bool) error {
 	// Events are unique, so each one maps back to exactly one manifest key.
 	keys := map[string]string{}
 	var events []string
 	for _, key := range canonical.SortedKeys(m.Revisions) {
 		event := m.Revisions[key].Event
 		if !reachable[event] || keys[event] != "" {
-			return fail(fmt.Errorf("duplicate or unreachable revision event"))
+			return fmt.Errorf("duplicate or unreachable revision event")
 		}
 		keys[event] = key
 		events = append(events, event)
 	}
-	err = r.readObjects(ctx, events, func(event, kind string, data []byte) error {
+	return r.readObjects(ctx, events, func(event, kind string, data []byte) error {
 		if kind != "commit" {
 			return fmt.Errorf("revision event is not a commit")
 		}
@@ -351,19 +408,53 @@ func (r *Repository) readState(ctx context.Context, oid string) (canonical.Manif
 		}
 		return nil
 	})
-	if err != nil {
-		return fail(err)
-	}
-	for _, tip := range m.Refs {
-		if !reachable[tip] {
-			return fail(fmt.Errorf("unreachable projection"))
+}
+
+// checkChangesets requires every changeset commit of a growing manifest to be
+// reachable and to list exactly the revisions the manifest maps to it, with
+// the header the policy writes for them. Removed revisions keep their
+// commits, so they are checked as well.
+func (r *Repository) checkChangesets(ctx context.Context, m canonical.Manifest, reachable map[string]bool) error {
+	keys := map[string][]string{}
+	for _, key := range canonical.SortedKeys(m.Revisions) {
+		event := m.Revisions[key].Event
+		if !reachable[event] {
+			return fmt.Errorf("unreachable changeset commit")
 		}
+		keys[event] = append(keys[event], key)
 	}
-	r.phases.begin("fsck", "Running git fsck on the generation")
-	if _, err := r.git(ctx, nil, nil, "fsck", "--strict", "--no-dangling", oid); err != nil {
-		return fail(err)
-	}
-	return m, nil
+	p := r.Config.Policy
+	return r.readObjects(ctx, canonical.SortedKeys(keys), func(event, kind string, data []byte) error {
+		if kind != "commit" {
+			return fmt.Errorf("changeset is not a commit")
+		}
+		head, message, ok := bytes.Cut(data, []byte("\n\n"))
+		lines := strings.Split(string(head), "\n")
+		if !ok || len(lines) != 4 || !strings.HasPrefix(lines[0], "tree ") || !strings.HasPrefix(lines[1], "parent ") {
+			return fmt.Errorf("invalid changeset ancestry")
+		}
+		identity, timestamp, err := canonical.AuthorLine(lines[2])
+		if err != nil {
+			return fmt.Errorf("invalid changeset author")
+		}
+		members, err := p.ParseChangeset(identity, message)
+		if err != nil {
+			return fmt.Errorf("invalid changeset message: %w", err)
+		}
+		var got []string
+		for _, member := range members {
+			got = append(got, member.Key.ID())
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, keys[event]) {
+			return fmt.Errorf("changeset revisions differ from the manifest")
+		}
+		expected := canonical.CommitBytes(strings.TrimPrefix(lines[0], "tree "), []string{strings.TrimPrefix(lines[1], "parent ")}, identity, p.Relay(), timestamp, message)
+		if !bytes.Equal(data, expected) {
+			return fmt.Errorf("noncanonical changeset header")
+		}
+		return nil
+	})
 }
 
 func (r *Repository) validateProjections(refs map[string]string, state string, expected map[string]string, allowJournal bool) error {
@@ -626,6 +717,11 @@ func (r *Repository) publishGeneration(ctx context.Context, g canonical.Generati
 	if _, err := r.readState(ctx, g.State); err != nil {
 		return err
 	}
+	if r.Config.Policy.Growing {
+		if err := r.checkFastForward(ctx, g); err != nil {
+			return err
+		}
+	}
 	if err := opts.hit("objects-written"); err != nil {
 		return err
 	}
@@ -671,5 +767,32 @@ func (r *Repository) publishGeneration(ctx context.Context, g canonical.Generati
 	}
 	r.StateOID = g.State
 	r.Manifest = g.Manifest
+	return nil
+}
+
+// checkFastForward makes sure that a growing generation only moves refs
+// forward: every published ref stays and descends from its published value,
+// and so does the state. Forks of the destination then never see history
+// rewritten. Grow builds generations like that; this check keeps a defect
+// from ever reaching the refs.
+func (r *Repository) checkFastForward(ctx context.Context, g canonical.Generation) error {
+	if r.StateOID == "" {
+		return nil
+	}
+	pairs := [][2]string{{r.StateOID, g.State}}
+	for _, ref := range canonical.SortedKeys(r.Manifest.Refs) {
+		next, ok := g.Manifest.Refs[ref]
+		if !ok {
+			return diag.New("integrity", "publish.fast-forward", "growing history would delete a published ref", nil, "ref", ref)
+		}
+		if old := r.Manifest.Refs[ref]; old != next {
+			pairs = append(pairs, [2]string{old, next})
+		}
+	}
+	for _, p := range pairs {
+		if _, err := r.git(ctx, nil, nil, "merge-base", "--is-ancestor", p[0], p[1]); err != nil {
+			return diag.New("integrity", "publish.fast-forward", "growing history would move a ref backwards or sideways", err, "old", p[0], "new", p[1])
+		}
+	}
 	return nil
 }

@@ -21,17 +21,25 @@ import (
 // whole history, which can need far longer than an ordinary command.
 const pushTimeout = 2 * time.Hour
 
-// pushRefspecs select what the remote receives. All of them are forced,
-// because accepted source changes rewrite branches and moved tags. The
-// publication journal and local backups are bookkeeping of this destination
-// and are never sent; superseded generations are sent, since the remote would
-// otherwise lose history that CVS no longer has.
-var pushRefspecs = []string{
-	"+refs/heads/*:refs/heads/*",
-	"+refs/tags/*:refs/tags/*",
-	"+refs/cvsgitrelay/*:refs/cvsgitrelay/*",
-	"^refs/cvsgitrelay/ops/*",
-	"^refs/cvsgitrelay/backup/*",
+// pushRefspecs select what the remote receives. The publication journal and
+// local backups are bookkeeping of this destination and are never sent;
+// superseded generations are sent, since the remote would otherwise lose
+// history that CVS no longer has. Canonical history forces every ref,
+// because accepted source changes rewrite branches and moved tags. Growing
+// history forces none: its refs only move forward, so the remote rejects
+// any update that would not, instead of rewriting what forks build on.
+func pushRefspecs(growing bool) []string {
+	force := "+"
+	if growing {
+		force = ""
+	}
+	return []string{
+		force + "refs/heads/*:refs/heads/*",
+		force + "refs/tags/*:refs/tags/*",
+		force + "refs/cvsgitrelay/*:refs/cvsgitrelay/*",
+		"^refs/cvsgitrelay/ops/*",
+		"^refs/cvsgitrelay/backup/*",
+	}
 }
 
 // ValidateRemote rejects a remote that embeds credentials, as a CVSROOT with
@@ -91,7 +99,7 @@ func (r *Repository) pushRemote(ctx context.Context, remote, token string) error
 	// Authentication must never wait for a person: ssh fails instead of
 	// prompting, as the sync usually runs from a scheduler.
 	env := append([]string{"GIT_SSH_COMMAND=ssh -o BatchMode=yes"}, tokenEnv(remote, token)...)
-	args := append([]string{"push", "--atomic", "--prune", "--no-progress", "--porcelain", "--", remote}, pushRefspecs...)
+	args := append([]string{"push", "--atomic", "--prune", "--no-progress", "--porcelain", "--", remote}, pushRefspecs(r.Config.Policy.Growing)...)
 	_, err := runner.Run(ctx, "", env, nil, "git", r.gitArgs(args...)...)
 	return err
 }

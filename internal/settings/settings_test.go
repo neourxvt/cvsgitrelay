@@ -96,6 +96,20 @@ func TestRemote(t *testing.T) {
 	}
 }
 
+// The history model is optional; a named one must be known.
+func TestHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.toml")
+	for history, valid := range map[string]bool{"": true, "growing": true, "canonical": true, "append-only": false} {
+		if err := os.WriteFile(path, []byte(base+"history = \""+history+"\"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(path)
+		if (err == nil) != valid || (valid && c.Destination.History != history) {
+			t.Fatalf("history %q: %+v, %v", history, c.Destination, err)
+		}
+	}
+}
+
 // The remote secret must decode, and a token needs an https remote.
 func TestRemoteSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.toml")

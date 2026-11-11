@@ -58,7 +58,17 @@ type Destination struct {
 	// RemoteSecret is the access token for an https Remote, encoded by
 	// "cvsgitrelay encode-secret", or the path of a file that holds it.
 	RemoteSecret string `toml:"remote_secret"`
+	// History is the history model, fixed when the destination is created:
+	// "growing" only ever adds commits, so the published refs only move
+	// forward, and "canonical" rebuilds history from the source alone and
+	// rewrites it when CVS history changes. Empty keeps the model of an
+	// existing destination and gives a new one DefaultHistory.
+	History string `toml:"history"`
 }
+
+// DefaultHistory is the history model of a new destination whose
+// configuration does not name one.
+const DefaultHistory = "growing"
 
 // RemoteToken returns the decoded access token for the remote, or "" when no
 // remote or secret is configured.
@@ -318,6 +328,9 @@ func (c Config) Validate() error {
 				return invalid("destination.remote_secret", "an access token can only be used with an https:// destination.remote")
 			}
 		}
+	}
+	if c.Destination.History != "" && c.Destination.History != "growing" && c.Destination.History != "canonical" {
+		return invalid("destination.history", "choose growing or canonical")
 	}
 	if c.Source.Submodules != "exclude" && c.Source.Submodules != "include" {
 		return invalid("source.submodules", "choose exclude or include")

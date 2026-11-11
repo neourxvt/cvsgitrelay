@@ -41,12 +41,12 @@ func gitIn(t *testing.T, path string, args ...string) string {
 }
 
 // Sync pushes the state ref and every projection to the remote, forces the
-// remote back to the local generation, prunes refs the local generation does
-// not have, and keeps local bookkeeping refs to itself.
+// remote of canonical history back to the local generation, prunes refs the
+// local generation does not have, and keeps local bookkeeping refs to itself.
 func TestSyncPushesToRemote(t *testing.T) {
 	root, _, _ := fixture(t)
 	ctx := context.Background()
-	r := openFixture(t, root, "full")
+	r := openCanonicalFixture(t, root, "full")
 	remote := t.TempDir()
 	gitIn(t, remote, "init", "--bare", "--quiet", remote)
 

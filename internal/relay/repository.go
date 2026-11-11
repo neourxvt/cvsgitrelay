@@ -253,13 +253,18 @@ func validateConfig(c Config) error {
 // New destinations use format 3, keep executable file modes and name branches
 // readably unless a branch map names them; authors is its optional CVS
 // username map and branches the optional selection and renaming of branches.
-func Init(ctx context.Context, runner *process.Runner, path, root, module, source, submodules, verification string, authors, branches map[string]string) error {
+// history selects the history model: "growing", whose refs only move
+// forward, or "canonical", which rebuilds history from the source alone.
+func Init(ctx context.Context, runner *process.Runner, path, root, module, source, submodules, verification, history string, authors, branches map[string]string) error {
 	r := &Repository{Config: Config{Version: 3, SourceID: source, CVSRoot: root, Module: module}, Runner: runner, Submodules: submodules}
 	if _, err := sourceDirectory(root); err != nil {
 		return err
 	}
 	if err := modulePath(module); err != nil {
 		return err
+	}
+	if history != "growing" && history != "canonical" {
+		return diag.New("config", "init.policy", "history must be growing or canonical", nil)
 	}
 	initialPolicy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Mappings: []canonical.Mapping{{Archive: module}}, Format: 3, Authors: authors, Branches: branches}
 	if err := initialPolicy.Validate(); err != nil {
@@ -270,7 +275,7 @@ func Init(ctx context.Context, runner *process.Runner, path, root, module, sourc
 		return err
 	}
 
-	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors, Branches: branches, Executable: true, ReadableBranches: len(branches) == 0}
+	policy := canonical.Policy{Source: source, Module: module, Submodules: submodules, Verify: verification, Format: 3, Authors: authors, Branches: branches, Executable: true, ReadableBranches: len(branches) == 0, Growing: history == "growing"}
 	for _, m := range layout {
 		policy.Mappings = append(policy.Mappings, canonical.Mapping{Archive: m.Source, Checkout: m.Destination})
 	}

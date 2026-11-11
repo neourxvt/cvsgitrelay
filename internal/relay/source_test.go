@@ -29,7 +29,8 @@ func TestV2RemoteCVSImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	remote := openFixture(t, ":ext:reader@fixture:"+root, "full")
+	// Only canonical history converges with a fresh import.
+	remote := openCanonicalFixture(t, ":ext:reader@fixture:"+root, "full")
 	if _, err := remote.Sync(ctx, Options{Connections: 4}); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func TestV2RemoteCVSImport(t *testing.T) {
 	if _, err := remote.Sync(ctx, Options{Connections: 1}); err != nil {
 		t.Fatal(err)
 	}
-	fresh := openFixture(t, ":fork:"+root, "full")
+	fresh := openCanonicalFixture(t, ":fork:"+root, "full")
 	if _, err := fresh.Sync(ctx, Options{Connections: 4}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,33 +211,53 @@ func TestAcceptSourceScansOfLocalMirrors(t *testing.T) {
 func TestRequestedPolicyMode(t *testing.T) {
 	for _, pinned := range []string{"full", "trust-append-only"} {
 		r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: pinned, Format: 3}}}
-		if err := r.ValidateRequestedPolicy("s", "", nil, nil); err != nil {
+		if err := r.ValidateRequestedPolicy("s", "", "", nil, nil); err != nil {
 			t.Fatalf("omitted mode rejected for a %s destination: %v", pinned, err)
 		}
-		if err := r.ValidateRequestedPolicy("s", pinned, nil, nil); err != nil {
+		if err := r.ValidateRequestedPolicy("s", pinned, "", nil, nil); err != nil {
 			t.Fatalf("matching mode rejected: %v", err)
 		}
 	}
 	r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: "full", Format: 3}}}
-	if err := r.ValidateRequestedPolicy("s", "trust-append-only", nil, nil); err == nil {
+	if err := r.ValidateRequestedPolicy("s", "trust-append-only", "", nil, nil); err == nil {
 		t.Fatal("a different mode was accepted")
+	}
+}
+
+// A configuration without a history model accepts the pinned one; a named
+// model must match it.
+func TestRequestedPolicyHistory(t *testing.T) {
+	for _, growing := range []bool{true, false} {
+		r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: "full", Format: 3, Growing: growing}}}
+		pinned, other := "growing", "canonical"
+		if !growing {
+			pinned, other = other, pinned
+		}
+		for _, history := range []string{"", pinned} {
+			if err := r.ValidateRequestedPolicy("s", "", history, nil, nil); err != nil {
+				t.Fatalf("history %q rejected for a %s destination: %v", history, pinned, err)
+			}
+		}
+		if err := r.ValidateRequestedPolicy("s", "", other, nil, nil); err == nil {
+			t.Fatalf("history %s accepted for a %s destination", other, pinned)
+		}
 	}
 }
 
 // Both maps are part of the destination's policy and cannot change later.
 func TestRequestedPolicyMaps(t *testing.T) {
 	r := &Repository{Config: Config{SourceID: "s", Policy: canonical.Policy{Verify: "full", Format: 3, Authors: map[string]string{"a": "A <a@x>"}, Branches: map[string]string{"trunk": "main"}}}}
-	if err := r.ValidateRequestedPolicy("s", "full", map[string]string{"a": "A <a@x>"}, map[string]string{"trunk": "main"}); err != nil {
+	if err := r.ValidateRequestedPolicy("s", "full", "", map[string]string{"a": "A <a@x>"}, map[string]string{"trunk": "main"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, branches := range []map[string]string{nil, {}, {"trunk": "master"}, {"trunk": "main", "x": "y"}} {
-		if err := r.ValidateRequestedPolicy("s", "full", map[string]string{"a": "A <a@x>"}, branches); err == nil {
+		if err := r.ValidateRequestedPolicy("s", "full", "", map[string]string{"a": "A <a@x>"}, branches); err == nil {
 			t.Fatalf("branch map %v accepted", branches)
 		}
 	}
 	// A destination without a map treats nil and an empty table alike.
 	r.Config.Policy.Branches = nil
-	if err := r.ValidateRequestedPolicy("s", "full", map[string]string{"a": "A <a@x>"}, map[string]string{}); err != nil {
+	if err := r.ValidateRequestedPolicy("s", "full", "", map[string]string{"a": "A <a@x>"}, map[string]string{}); err != nil {
 		t.Fatal(err)
 	}
 }

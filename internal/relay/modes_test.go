@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,13 +105,21 @@ func chmodArchive(t *testing.T, root, archive string, mode os.FileMode) {
 
 // A new destination gives files of executable archives mode 100755, on the
 // trunk as well as for a file that only lives on a branch in the Attic. A
-// later chmod is accepted as changed history of that file only.
+// later chmod is accepted as changed history of that file only: canonical
+// history rewrites the branches and supersedes the old generation, growing
+// history adds correction commits on top of them.
 func TestSyncKeepsExecutableModes(t *testing.T) {
+	for _, history := range []string{"growing", "canonical"} {
+		t.Run(history, func(t *testing.T) { testSyncKeepsExecutableModes(t, history) })
+	}
+}
+
+func testSyncKeepsExecutableModes(t *testing.T, history string) {
 	root, _, _ := fixture(t)
 	ctx := context.Background()
 	chmodArchive(t, root, "active,v", 0555)
 	chmodArchive(t, root, "Attic/branch-only,v", 0555)
-	r := openFixture(t, root, "full")
+	r := openHistoryFixture(t, root, "full", history)
 	if !r.Config.Policy.Executable {
 		t.Fatal("new destination does not keep executable modes")
 	}
@@ -126,15 +135,26 @@ func TestSyncKeepsExecutableModes(t *testing.T) {
 			t.Fatalf("%s:%s has mode %s, want %s", c.rev, c.path, mode, c.mode)
 		}
 	}
-	original := r.StateOID
+	original, before := r.StateOID, maps.Clone(r.Manifest.Refs)
 
 	chmodArchive(t, root, "active,v", 0444)
 	s, err := r.Sync(ctx, Options{AcceptHistoryChanges: true})
 	if err != nil {
 		t.Fatal(diag.Details(err, false))
 	}
-	if s.HistoryChanged == 0 || s.HistoryRemoved != 0 || supersededRefs(t, r)[s.Superseded] != original {
+	if s.HistoryChanged == 0 || s.HistoryRemoved != 0 {
 		t.Fatalf("chmod not accepted as changed history: %+v", s)
+	}
+	if history == "canonical" && supersededRefs(t, r)[s.Superseded] != original {
+		t.Fatalf("chmod did not supersede the old generation: %+v", s)
+	}
+	if history == "growing" {
+		// One correction per line with the file: trunk, the vendor branch
+		// and feature.
+		if s.Superseded != "" || len(supersededRefs(t, r)) != 0 || s.Corrections != 3 {
+			t.Fatalf("chmod not corrected on top of growing history: %+v", s)
+		}
+		requireFastForward(t, r, original, before)
 	}
 	for _, c := range []struct{ rev, path, mode string }{
 		{trunkRef, "active", "100644"}, {branch, "active", "100644"}, {branch, "branch-only", "100755"},

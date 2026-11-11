@@ -117,7 +117,8 @@ func TestV2DamagedRecoveryEvidence(t *testing.T) {
 func TestV2FailedReadsAndProjectionDeletion(t *testing.T) {
 	root, work, _ := fixture(t)
 	ctx := context.Background()
-	r := openFixture(t, root, "full")
+	// Only canonical history deletes the ref of a deleted tag.
+	r := openCanonicalFixture(t, root, "full")
 	if _, err := r.Sync(ctx, Options{}); err != nil {
 		t.Fatal(err)
 	}

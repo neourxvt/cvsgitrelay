@@ -364,7 +364,7 @@ func runRepository(ctx context.Context, operation, configPath string, cfg settin
 	if operation == "sync" {
 		// First sync provisions a new destination before opening it for import.
 		if _, statErr := os.Stat(filepath.Join(cfg.Destination.Repo, "cvsgitrelay.json")); os.IsNotExist(statErr) {
-			err = relay.Init(ctx, runner, cfg.Destination.Repo, cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.SourceID, cfg.Source.Submodules, cmp.Or(cfg.Verify.Mode, settings.DefaultVerifyMode), cfg.Authors, cfg.Branches)
+			err = relay.Init(ctx, runner, cfg.Destination.Repo, cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.SourceID, cfg.Source.Submodules, cmp.Or(cfg.Verify.Mode, settings.DefaultVerifyMode), cmp.Or(cfg.Destination.History, settings.DefaultHistory), cfg.Authors, cfg.Branches)
 		} else if statErr != nil {
 			err = diag.New("io", "sync.open", "cannot inspect destination configuration", statErr)
 		}
@@ -385,7 +385,7 @@ func runRepository(ctx context.Context, operation, configPath string, cfg settin
 			defer repository.Close()
 			log = log.With("source_id", repository.Config.SourceID)
 			runner.Log = log
-			if err = repository.ValidateRequestedPolicy(cfg.Source.SourceID, cfg.Verify.Mode, cfg.Authors, cfg.Branches); err == nil {
+			if err = repository.ValidateRequestedPolicy(cfg.Source.SourceID, cfg.Verify.Mode, cfg.Destination.History, cfg.Authors, cfg.Branches); err == nil {
 				err = repository.ConfigureSource(cfg.Source.CVSRoot, cfg.Source.Module, cfg.Source.Submodules)
 			}
 			if err == nil {

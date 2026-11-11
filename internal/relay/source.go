@@ -117,6 +117,11 @@ func (r *Repository) readSourceMetadata(ctx context.Context) (canonical.Inventor
 			parent := canonical.Key{Source: r.Config.SourceID, Archive: revision.SourcePath, Number: revision.Predecessor}
 			record.Parent = &parent
 		}
+		// Commit IDs group changesets of growing history and are no part
+		// of other policies.
+		if r.Config.Policy.Growing {
+			record.CommitID = revision.CommitID
+		}
 		in.Records = append(in.Records, record)
 	}
 	for _, file := range listed.Files {
@@ -175,7 +180,8 @@ func (r *Repository) historyChanges(in canonical.Inventory) []historyChange {
 	var changes []historyChange
 	for _, id := range canonical.SortedKeys(r.Manifest.Revisions) {
 		record, listed := current[id]
-		if listed && record.Fingerprint() == r.Manifest.Revisions[id].Fingerprint {
+		// Growing history already recorded the removal of a revision.
+		if (listed && record.Fingerprint() == r.Manifest.Revisions[id].Fingerprint) || (!listed && r.Manifest.Removed[id]) {
 			continue
 		}
 		// The manifest stores decodable key bytes; readState validated them.
@@ -232,7 +238,7 @@ func (r *Repository) verifyListed(in canonical.Inventory) (map[string]canonical.
 		current[record.Key.ID()] = record
 	}
 	for _, key := range canonical.SortedKeys(r.Manifest.Revisions) {
-		if _, ok := current[key]; !ok {
+		if _, ok := current[key]; !ok && !r.Manifest.Removed[key] {
 			return nil, diag.New("source", "source.verify", "SOURCE_MISSING: previously accepted revision disappeared", nil, "key_hex", hexBytes(key))
 		}
 	}
@@ -512,14 +518,26 @@ func (r *Repository) acceptSource(ctx context.Context, opts *Options) (canonical
 	return first, stats, nil
 }
 
+// History names the history model of the destination.
+func (r *Repository) History() string {
+	if r.Config.Policy.Growing {
+		return "growing"
+	}
+	return "canonical"
+}
+
 // ValidateRequestedPolicy prevents a command-line policy change from silently
 // reinterpreting already accepted source records or the verification guarantee.
 // An empty verify requests no particular mode and accepts the pinned one.
 // The author map is fixed at init because it is part of every event commit,
-// and the branch map because it names every published branch ref.
-func (r *Repository) ValidateRequestedPolicy(source, verify string, authors, branches map[string]string) error {
+// and the branch map because it names every published branch ref. An empty
+// history likewise accepts the pinned history model.
+func (r *Repository) ValidateRequestedPolicy(source, verify, history string, authors, branches map[string]string) error {
 	if source != r.Config.SourceID || (verify != "" && verify != r.Config.Policy.Verify) {
 		return diag.New("config", "source.policy", "source identity or verification policy differs from the destination; use a new destination", nil)
+	}
+	if history != "" && history != r.History() {
+		return diag.New("config", "source.policy", "history model differs from the destination; use a new destination", nil)
 	}
 	if !maps.Equal(authors, r.Config.Policy.Authors) {
 		if r.Config.Version == 2 {
