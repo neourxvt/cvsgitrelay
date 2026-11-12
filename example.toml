@@ -288,3 +288,6 @@ name = "rxvt-unicode"
 name = "libev"
 # [repository.sync]
 # connections = 4                 # only this repository reads in parallel
+
+[[repository]]
+name = "libptytty"
